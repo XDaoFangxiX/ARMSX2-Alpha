@@ -1040,9 +1040,9 @@ bool GSState::CanBufferNewDraw()
 
 				if (copy_amt && m_env_buffers[i].m_env.PRIM.PRIM == m_env_buffers[m_current_buffer_idx].m_env.PRIM.PRIM)
 				{
-					memcpy(&vtx_buff.buff[vtx_buff.tail], &m_vertex_buffers[m_current_buffer_idx].buff[m_vertex_buffers[m_current_buffer_idx].head], sizeof(GSVertex) * copy_amt);
+					memcpy(&vtx_buff.buff[m_buff.tail], &m_vertex_buffers[m_current_buffer_idx].buff[m_vertex_buffers[m_current_buffer_idx].head], sizeof(GSVertex) * copy_amt);
 
-					vtx_buff.tail += copy_amt;
+					m_buff.tail += copy_amt;
 				}
 				else
 					copy_amt = 0;
