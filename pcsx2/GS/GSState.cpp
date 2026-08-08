@@ -1028,11 +1028,8 @@ bool GSState::CanBufferNewDraw()
 				m_index = &m_index_buffers[i];
 				m_vertex = &m_vertex_buffers[i];
 
-				const u32 copy_amt = m_vertex_buffers[m_current_buffer_idx].tail - m_vertex_buffers[m_current_buffer_idx].head;
-
-				m_recent_buffer_switch = m_vertex->tail == m_vertex->head;
 				if (m_index->tail)
-					m_vertex->tail = m_index->buff[m_index->tail - 1] + 1;
+					m_buff.tail = std::max(m_buff.buff[m_buff.tail - 1], m_buff.buff[std::max(static_cast<int>(m_buff.tail) - 2, 0)]) + 1;
 				else
 					m_vertex->tail = 0;
 
