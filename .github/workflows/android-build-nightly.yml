@@ -87,26 +87,48 @@ jobs:
         env:
           DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
 
-      # ===== 5. SETUP GITHUB CLI & DELETE OLD RELEASE/TAG (Ultra) =====
+      # ===== NEW: Set up GitHub CLI =====
+      - name: Set up GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install gh -y
+
       - name: Authenticate GitHub CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      - name: Delete previous release and tag (Ultra-Plus)
+      # ===== NEW: Delete previous release and tag =====
+      - name: Get previous release
+        id: get_release
         run: |
-          TAG="${{ steps.build.outputs.TAG }}"
-          if gh release view "$TAG" &>/dev/null; then
-            gh release delete "$TAG" --yes
-          fi
-          if git rev-parse "$TAG" &>/dev/null; then
-            git tag -d "$TAG"
-            git push --delete origin "$TAG" || true
+          previous_release=$(gh release list --limit 1 --json tagName -q '.[].tagName')
+          echo "previous_release=$previous_release" >> $GITHUB_ENV
+
+      - name: Delete previous release
+        if: env.previous_release != ''
+        run: |
+          gh release delete ${{ env.previous_release }} --yes
+
+      - name: Check if previous tag exists
+        id: check_tag
+        run: |
+          if [ ! -z "${{ env.previous_release }}" ] && git rev-parse ${{ env.previous_release }} >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_ENV
+          else
+            echo "tag_exists=false" >> $GITHUB_ENV
           fi
 
-      # ===== 6. GET SHORT SHA =====
+      - name: Delete previous tag
+        if: env.tag_exists == 'true'
+        run: |
+          git tag -d ${{ env.previous_release }}
+          git push --delete origin ${{ env.previous_release }}
+
+      # ===== Get short SHA =====
       - name: Get short SHA
         id: vars
         run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
+      # ===== Create new tag and release =====
       - name: Create Git Tag
         id: create_tag
         run: |
