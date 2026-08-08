@@ -873,11 +873,11 @@ void GSState::PushBuffer()
 		m_vertex = &m_vertex_buffers[m_used_buffers_idx];
 
 		const u32 base = m_vertex_buffers[m_current_buffer_idx].head;
-		const u32 copy_amt = m_vertex_buffers[m_current_buffer_idx].tail - base;
+		u32 copy_amt = m_vertex_buffers[m_current_buffer_idx].tail - base;
 
 		m_vertex->tail = 0;
 
-		if (copy_amt)
+		if (copy_amt && m_env.PRIM.PRIM == m_env_buffers[m_current_buffer_idx].m_env.PRIM.PRIM)
 			memcpy(m_vertex->buff, &m_vertex_buffers[m_current_buffer_idx].buff[base], sizeof(GSVertex) * copy_amt);
 
 		m_vertex->head = 0;
@@ -885,6 +885,8 @@ void GSState::PushBuffer()
 		m_vertex->tail += copy_amt;
 
 		if (copy_amt)
+			else
+			copy_amt = 0;
 		{
 			for (u32 i = 0; i < copy_amt; i++)
 			{
