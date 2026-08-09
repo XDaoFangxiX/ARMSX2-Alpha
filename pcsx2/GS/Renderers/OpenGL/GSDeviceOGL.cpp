@@ -1055,16 +1055,28 @@ bool GSDeviceOGL::CheckFeatures()
 	// GSFramebufferFetchPolicy.h for why it is a separate pure function). Nothing below may write
 	// m_features.framebuffer_fetch -- read `fbfetch` instead if you need to know what was decided.
 	//
-	// The Mali r44p1 blob loses the rendering context under the in-tile framebuffer-fetch blend path,
-	// exactly as it loses the Vulkan device under attachment-feedback-loop (VK_ERROR_DEVICE_LOST on
-	// effectively every game -- Mali-G615 r44p1). Mirror the Vulkan-side r44p1 gate (see GSDeviceVK.cpp)
-	// and drop this one blob to the non-fetch (copy) blend path. Narrow by driver version, not vendor,
-	// so other (working) Mali blobs keep the fast path. GL_VERSION reads e.g. "OpenGL ES 3.2 v1.r44p1-...".
-	const bool fbfetch_driver_blocklisted = (std::strstr(gl_version_str, "r44p1") != nullptr);
+	// Which drivers cannot survive the in-tile read is a fact about the DRIVER, so it lives in the
+	// driver-bug database with the rest of them (rule gl-arm-r44p1-attachment-self-read) rather than
+	// in a substring test here. UseRenderTargetCopyForFeedback is the same workaround the Vulkan
+	// backend keys its RT-copy fallback on -- fetch and the texture barrier are two spellings of one
+	// in-tile read, so a driver that fails the read fails both, and one bit answers for both APIs.
+	//
+	// This replaced a hand-rolled search for "r44p1" in GL_VERSION. The database matches a PARSED
+	// driver revision instead, which is what lets a rule say "exactly r44p1" rather than "contains
+	// r44p1" -- and what would let the next bad blob be a table row. gs_gpu_driver_profile_tests
+	// pins the real device string through the resolver, because a rule that silently matches
+	// nothing would put the device straight back on the faulting path with no diagnostic.
+	const bool fbfetch_driver_blocklisted =
+		GetMobileDriverProfile().UsesWorkaround(DriverWorkaround::UseRenderTargetCopyForFeedback);
 	const GSFramebufferFetchDecision fbfetch = DecideGLFramebufferFetch(GLAD_GL_ARM_shader_framebuffer_fetch,
 		GLAD_GL_EXT_shader_framebuffer_fetch, GLAD_GL_EXT_shader_pixel_local_storage, fbfetch_driver_blocklisted,
 		GSConfig.DisableFramebufferFetch, use_mali_profile);
 	m_features.framebuffer_fetch = fbfetch.enabled;
+	// GL fetch replaces the destination read but does NOT order overlapping primitives within one
+	// draw, so an overlapping draw keeps its full barrier (see FbFetchDropsDrawBarriers). Stated
+	// explicitly rather than left to the FeatureSupport memset: Vulkan and Metal both assign this
+	// bit, and a backend that stays silent reads as an oversight rather than as the answer.
+	m_features.framebuffer_fetch_orders_overlap = false;
 
 	switch (fbfetch.veto)
 	{
@@ -1097,7 +1109,27 @@ bool GSDeviceOGL::CheckFeatures()
 		m_features.multidraw_fb_copy = false;
 	}
 	else
+	{
 		m_features.texture_barrier = m_features.framebuffer_fetch || GLAD_GL_ARB_texture_barrier || GLAD_GL_NV_texture_barrier;
+
+		// Pick the blend fallback's shape now that we know whether there is a barrier. GLES always
+		// arrives here with multidraw_fb_copy set (there is no ARB/NV texture barrier), and on a
+		// device where fetch is also off -- the r44p1 blocklist, the user's setting, or simply no
+		// fetch extension -- that leaves the per-primitive render-target copy as the blend path,
+		// which on a tiler means a tile flush and resolve per primitive group. See
+		// GLUsesPerPrimitiveFbCopy for the measurement; the short version is 0.33 fps.
+		//
+		// Only the auto path decides this. Both OverrideTextureBarriers branches above already
+		// clear the flag themselves, and Force Disabled in particular must keep clearing it on
+		// desktop too -- the user asked for no barriers, not for a different kind of copy.
+		m_features.multidraw_fb_copy = GLUsesPerPrimitiveFbCopy(m_features.texture_barrier, m_is_gles);
+		if (!m_features.texture_barrier && !m_features.multidraw_fb_copy)
+		{
+			Console.WriteLn("GL: no texture barrier and no framebuffer fetch — accurate blending reads the "
+							"render target from a per-draw copy (the per-primitive copy costs a tile flush "
+							"per primitive on a tiler).");
+		}
+	}
 
 	m_features.provoking_vertex_last = true;
 	m_features.dxt_textures = GLAD_GL_EXT_texture_compression_s3tc;

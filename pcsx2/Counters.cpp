@@ -751,7 +751,24 @@ __fi void rcntSyncCounter(int i)
 {
 	if (counters[i].mode.ClockSource != 0x3) // don't count hblank sources
 	{
-		const u32 change = (cpuRegs.cycle - counters[i].startCycle) / counters[i].rate;
+		// The baseline can transiently sit ahead of cpuRegs.cycle (savestate thaw and
+		// vsync-retime seams). The old u32 `change` turned that underflow into
+		// startCycle += 2^32 - rate and count += 0xFFFFFFFF: a poisoned counter that
+		// stayed dead until cycle crossed the bogus baseline (~14.6 s) and rode along
+		// in every savestate taken meanwhile. Skip the sync instead; the counter
+		// resumes when cycle catches up, at most one tick later.
+		if ((s64)(cpuRegs.cycle - counters[i].startCycle) < 0)
+		{
+			// Post-fix this should be unreachable for ungated counters: every
+			// baseline writer rounds down from cpuRegs.cycle. A fire means the
+			// EE clock moved backwards — that is how the cross-thread
+			// nextEventCycle poke poisoned GoW2 savestates. Loud on purpose.
+			Console.Warning("rcntSyncCounter: counter %d baseline ahead of cycle by %lld — EE clock went backwards?",
+				i, (long long)(counters[i].startCycle - cpuRegs.cycle));
+			return;
+		}
+
+		const u64 change = (cpuRegs.cycle - counters[i].startCycle) / counters[i].rate;
 		counters[i].startCycle += change * counters[i].rate;
 
 		counters[i].startCycle &= ~((u64)counters[i].rate - 1);
@@ -1096,7 +1113,40 @@ bool SaveStateBase::rcntFreeze()
 	Freeze(gsIsInterlaced);
 
 	if (IsLoading())
+	{
+		// DELETEME after 2026-12-01: transitional repair for old poisoned states.
+		// Repair states poisoned by the old u32 rcntSyncCounter blowup (baseline one
+		// full 2^32 epoch in the future, count far outside the 16-bit domain): snap
+		// the baseline back to now and re-fold the count, or the counter stays dead
+		// until cycle crosses the bogus baseline. cpuRegs is thawed before us, so
+		// cpuRegs.cycle is the loaded state's own clock here.
+		//
+		// The trigger (cross-thread ExitExecution warping the EE clock backwards)
+		// was fixed 2026-08-09, so no new state can carry this scar; this block
+		// only heals .p2s files saved by builds older than that. Once those have
+		// aged out (a few months of releases), delete the loop below — the guard
+		// in rcntSyncCounter stays.
+		for (int i = 0; i < 4; i++)
+		{
+			bool repaired = false;
+			if ((s64)(cpuRegs.cycle - counters[i].startCycle) < 0)
+			{
+				counters[i].startCycle = cpuRegs.cycle & ~((u64)counters[i].rate - 1);
+				repaired = true;
+			}
+			// A state saved later in a poisoned session has a sane baseline but a count
+			// still draining down from the +0xFFFFFFFF blowup. The counters are 16-bit;
+			// anything past one pending overflow's worth is unambiguous corruption.
+			if (counters[i].count > 0x20000)
+			{
+				counters[i].count &= 0xffff;
+				repaired = true;
+			}
+			if (repaired)
+				Console.Warning("rcntFreeze: counter %d carried a poisoned baseline/count; repaired", i);
+		}
 		cpuRcntSet();
+	}
 
 	return IsOkay();
 }

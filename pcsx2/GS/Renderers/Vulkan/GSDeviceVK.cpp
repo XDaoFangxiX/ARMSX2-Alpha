@@ -3602,11 +3602,6 @@ bool GSDeviceVK::CheckFeatures()
 		(is_mali_vk || is_adreno || GSConfig.EnableAdrenoFramebufferFetch) && !is_xclipse_vk;
 	m_features.framebuffer_fetch = vendor_allows_fbfetch &&
 		m_optional_extensions.vk_ext_rasterization_order_attachment_access && !GSConfig.DisableFramebufferFetch;
-	// The Vulkan spelling of framebuffer fetch *is* rasterization-order attachment access, whose
-	// contract is that overlapping fragments in one draw observe each other in primitive order.
-	// So the ordering a full barrier would provide is already guaranteed, and keeping the barrier
-	// would only reintroduce the render-pass breaks this path exists to avoid.
-	m_features.framebuffer_fetch_orders_overlap = m_features.framebuffer_fetch;
 	m_features.texture_barrier = GSConfig.OverrideTextureBarriers != 0;
 	// No working in-pass render-target self-read (ARMSX2 #442, Qualcomm/Turnip). Force the RT-COPY
 	// path: with texture barriers off, GSRendererHW reads Cd from a separate copy of the target
@@ -3629,21 +3624,12 @@ bool GSDeviceVK::CheckFeatures()
 						"RT-copy blend path.");
 		m_features.texture_barrier = false;
 	}
-	// Mali r44p1: the attachment-feedback-loop-layout disable in CreateDevice only swapped the
-	// RT-as-texture LAYOUT/descriptor — it never removed the in-tile RT self-read itself, so Maximum
-	// blending kept sampling the colour attachment IN-TILE (fbfetch/ROAA subpassLoad OR the
-	// texture-barrier feedback loop; both lower to the same faulting tile-feedback silicon) and the
-	// device kept dying (VK_ERROR_DEVICE_LOST at vkWaitForFences, Rogue Galaxy). Force texture_barrier
-	// off so accurate blending routes through the RT-COPY path (draw_rt_clone) instead — the
-	// "fbfetch needs barriers" line below (framebuffer_fetch &= texture_barrier) then also turns
-	// fbfetch off, so the RT is only ever read from a SEPARATE copy, never in-tile. Slower but stable,
-	// and strictly r44p1-only (no other GPU, not even other Mali-G615 units, is touched).
-	if (is_mali_vk && m_optional_extensions.vk_khr_driver_properties &&
-		std::string_view(m_device_driver_properties.driverInfo).find("r44p1") != std::string_view::npos)
-	{
-		Console.WriteLn("Mali r44p1: forcing RT-copy blend path (texture_barrier off) — in-tile self-read faults.");
-		m_features.texture_barrier = false;
-	}
+	// (Mali r44p1 used to get its own copy of the block above, testing driverInfo for "r44p1" and
+	// clearing texture_barrier a second time. It is now rule vk-arm-r44p1-attachment-self-read in
+	// the driver-bug database, so rt_self_read_is_broken already covers it and the duplicate is
+	// gone. One difference, deliberate: the table-driven path respects OverrideTextureBarriers,
+	// which the hand-rolled test ignored -- and the comment above documents forcing barriers on as
+	// the way back to the in-tile path for A/B work, so honouring it is the intent.)
 	m_features.multidraw_fb_copy = false;
 	m_features.broken_point_sampler = false;
 
@@ -3681,6 +3667,32 @@ bool GSDeviceVK::CheckFeatures()
 
 	// Fbfetch is useless if we don't have barriers enabled.
 	m_features.framebuffer_fetch &= m_features.texture_barrier;
+
+	// The Vulkan spelling of framebuffer fetch *is* rasterization-order attachment access, whose
+	// contract is that overlapping fragments in one draw observe each other in primitive order.
+	// So the ordering a full barrier would provide is already guaranteed, and keeping the barrier
+	// would only reintroduce the render-pass breaks this path exists to avoid.
+	//
+	// Derived AFTER every write to framebuffer_fetch above, including the RT-copy workaround's
+	// texture_barrier mask. Deriving it beside the first assignment left the pair disagreeing on
+	// Adreno — no fetch, but "fetch orders overlap" still true — which is inert only for as long as
+	// every reader sits inside an `if (features.framebuffer_fetch)` gate, as DetermineBarriers
+	// currently does. Keep this the last word on the bit rather than relying on that.
+	//
+	// ⚠️ Delivering that contract for an in-pass SELF-read is a separate question from ordering, and
+	// Turnip answers the two differently depending on tiling. Read against mesa-26.1.2: the tiled
+	// path sets GRAS_SC_CNTL.SINGLE_PRIM_MODE = FLUSH_PER_OVERLAP under rasterization-order access,
+	// which the a6xx register docs define as waiting for any overlapping primitive prior to the
+	// current one — the ordering really is requested. The stronger FLUSH_PER_OVERLAP_AND_OVERWRITE,
+	// whose documented extra guarantee is that UCHE and CCU stay in sync "when fetching the previous
+	// value for the current pixel", is only ever set on the UNTILED sysmem path (and there a feedback
+	// loop alone is enough to get it). The device agrees: forcing ROAA on every pipeline changed
+	// nothing while tiled, and the same draw came out correct under TU_DEBUG=sysmem. So what fails
+	// on Adreno is read VISIBILITY while tiled — writes sit unresolved in GMEM while the fetch goes
+	// out through UCHE — not primitive ordering. Adreno never reaches this line with fetch enabled,
+	// so nothing here depends on it; a tiler whose fetch is a genuine tile-local read is a different
+	// case and is not implicated by any of the above.
+	m_features.framebuffer_fetch_orders_overlap = m_features.framebuffer_fetch;
 
 	// Mali Vulkan stacks frequently report dualSrcBlend=false. When absent, GSRendererHW SW-blends
 	// the specific draws that need SRC1 instead of relying on a global high blending-accuracy level
