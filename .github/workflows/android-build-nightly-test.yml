@@ -69,28 +69,44 @@ jobs:
           echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
           # Add download commands here if the SDK needs to be fetched from somewhere
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Build with Gradle (selected flavor & build type)
-        id: build
-        run: |
-          FLAVOR="${{ github.event.inputs.flavor }}"
-          BUILD_TYPE="${{ github.event.inputs.build_type }}"
-          FLAVOR_LOWER="$(echo ${FLAVOR} | tr '[:upper:]' '[:lower:]')"
-          BUILD_TYPE_LOWER="$(echo ${BUILD_TYPE} | tr '[:upper:]' '[:lower:]')"
-          FLAVOR_CAP="$(echo ${FLAVOR:0:1} | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
-          BUILD_TYPE_CAP="$(echo ${BUILD_TYPE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_TYPE:1}"
-          echo "FLAVOR_LOWER=${FLAVOR_LOWER}" >> $GITHUB_OUTPUT
-          echo "BUILD_TYPE_LOWER=${BUILD_TYPE_LOWER}" >> $GITHUB_OUTPUT
-          ./gradlew :app:assemble${FLAVOR_CAP}${BUILD_TYPE_CAP} --stacktrace --no-daemon
+      # Dual-core (4k + 16k page size) + PGO nightly. A stock `assembleRelease`
+      # ships ONLY the 4k core and cannot load its native core on 16k-page
+      # devices (Android 15+ handhelds). This compiles the core at both page
+      # sizes and merges both .so's into one APK, with PGO=optimize so the
+      # nightly matches release performance. See tools/ci-nightly-dualcore.sh.
+      - name: Build dual-core (4k + 16k) + PGO APK
         env:
-          DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
-
-      # ===== NEW: Run build-release-apk.sh =====
-      - name: Run build-release-apk.sh
-        run: bash tools/build-release-apk.sh
-        working-directory: platforms/android
+          FLAVOR: Github   # sideload build (com.armsx2)
+          # Rotation signing so a nightly installs OVER an existing com.armsx2 build.
+          # Add these repo secrets (base64 the keystores + lineage.bin):
+          #   NIGHTLY_DEBUG_KS_B64      = base64 of the <=API32 debug keystore (f942d6bb)
+          #   NIGHTLY_RELEASE_KS_B64    = base64 of armsx2_release.jks (df91c9ce)
+          #   NIGHTLY_LINEAGE_B64       = base64 of the signing lineage .bin
+          #   NIGHTLY_RELEASE_KS_PASS / NIGHTLY_RELEASE_KEY_ALIAS / NIGHTLY_RELEASE_KEY_PASS
+          # Without them the script warns and uses a throwaway key (won't update-install).
+          ROTATION_DEBUG_KS_B64: ${{ secrets.NIGHTLY_DEBUG_KS_B64 }}
+          ROTATION_RELEASE_KS_B64: ${{ secrets.NIGHTLY_RELEASE_KS_B64 }}
+          ROTATION_LINEAGE_B64: ${{ secrets.NIGHTLY_LINEAGE_B64 }}
+          ROTATION_RELEASE_KS_PASS: ${{ secrets.NIGHTLY_RELEASE_KS_PASS }}
+          ROTATION_RELEASE_KEY_ALIAS: ${{ secrets.NIGHTLY_RELEASE_KEY_ALIAS }}
+          ROTATION_RELEASE_KEY_PASS: ${{ secrets.NIGHTLY_RELEASE_KEY_PASS }}
+        run: |
+          # versionCode = Unix seconds since 2023-11-14: monotonic, unique per build, and
+          # always far above the manual 10xx codes, so a nightly always installs over the
+          # previously installed build (and over the last hand-built release). Fits int32
+          # for ~60 years. Manual builds, if any, should stay below or also use this.
+          export VC="$(( $(date -u +%s) - 1700000000 ))"
+          export VN="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          export VN="${VN:-nightly}"
+          if [ -n "$ROTATION_DEBUG_KS_B64" ] && [ -n "$ROTATION_RELEASE_KS_B64" ] && [ -n "$ROTATION_LINEAGE_B64" ]; then
+            printf '%s' "$ROTATION_DEBUG_KS_B64"   | base64 -d > "$RUNNER_TEMP/debug.jks"
+            printf '%s' "$ROTATION_RELEASE_KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            printf '%s' "$ROTATION_LINEAGE_B64"    | base64 -d > "$RUNNER_TEMP/lineage.bin"
+            export ROTATION_DEBUG_KS="$RUNNER_TEMP/debug.jks"
+            export ROTATION_RELEASE_KS="$RUNNER_TEMP/release.jks"
+            export ROTATION_LINEAGE="$RUNNER_TEMP/lineage.bin"
+          fi
+          bash tools/ci-nightly-dualcore.sh
 
       # ===== Set up GitHub CLI =====
       - name: Set up GitHub CLI
@@ -161,7 +177,7 @@ jobs:
             - Flavor: ${{ github.event.inputs.flavor }}
             - Build type: ${{ github.event.inputs.build_type }}
           files: |
-            platforms/android/app/build/outputs/apk/${{ steps.build.outputs.FLAVOR_LOWER }}/${{ steps.build.outputs.BUILD_TYPE_LOWER }}/*.apk
+            platforms/android/app/build/outputs/apk/nightly/*.apk
           draft: false
           prerelease: true
           generate_release_notes: false
