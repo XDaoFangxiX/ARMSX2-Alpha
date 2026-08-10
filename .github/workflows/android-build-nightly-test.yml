@@ -90,7 +90,7 @@ jobs:
       # ===== NEW: Run build-release-apk.sh =====
       - name: Run build-release-apk.sh
         run: bash tools/build-release-apk.sh
-        working-directory: .
+        working-directory: platforms/android
 
       # ===== Set up GitHub CLI =====
       - name: Set up GitHub CLI
