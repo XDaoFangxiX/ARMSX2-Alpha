@@ -1,0 +1,169 @@
+name: Android Build ( Single Core & PGO )
+
+on:
+  workflow_dispatch:
+    inputs:
+      versionName:
+        description: 'Version name (e.g., v2.0.0)'
+        required: true
+        type: string
+        default: 'nightly'
+      build_type:
+        description: "Build type"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - debug
+          - release
+      flavor:
+        description: 'Build flavor (Github or Play)'
+        required: false
+        type: choice
+        options:
+          - Github
+          - Play
+        default: 'Github'
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: platforms/android
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK + CMake
+        run: yes | sdkmanager "ndk;28.2.13676358" "cmake;3.31.6" >/dev/null || true
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - name: Fetch shaderc third-party deps
+        run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
+
+      - name: Set versionName in build.gradle.kts
+        run: |
+          sed -i 's/versionName = ".*"/versionName = "${{ github.event.inputs.versionName }}"/' app/build.gradle.kts
+
+      - name: Set up Discord SDK
+        run: |
+          echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
+          # Add download commands here if the SDK needs to be fetched from somewhere
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle (selected flavor & build type)
+        id: build
+        run: |
+          FLAVOR="${{ github.event.inputs.flavor }}"
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          FLAVOR_LOWER="$(echo ${FLAVOR} | tr '[:upper:]' '[:lower:]')"
+          BUILD_TYPE_LOWER="$(echo ${BUILD_TYPE} | tr '[:upper:]' '[:lower:]')"
+          FLAVOR_CAP="$(echo ${FLAVOR:0:1} | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
+          BUILD_TYPE_CAP="$(echo ${BUILD_TYPE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_TYPE:1}"
+          echo "FLAVOR_LOWER=${FLAVOR_LOWER}" >> $GITHUB_OUTPUT
+          echo "BUILD_TYPE_LOWER=${BUILD_TYPE_LOWER}" >> $GITHUB_OUTPUT
+          ./gradlew :app:assemble${FLAVOR_CAP}${BUILD_TYPE_CAP} --stacktrace --no-daemon
+        env:
+          DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
+
+      # ===== NEW: Run build-release-apk.sh =====
+      - name: Run build-release-apk.sh
+        run: bash tools/build-release-apk.sh
+        working-directory: .
+
+      # ===== Set up GitHub CLI =====
+      - name: Set up GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      # ===== Delete previous release and tag =====
+      - name: Get previous release
+        id: get_release
+        run: |
+          previous_release=$(gh release list --limit 1 --json tagName -q '.[].tagName')
+          echo "previous_release=$previous_release" >> $GITHUB_ENV
+
+      - name: Delete previous release
+        if: env.previous_release != ''
+        run: |
+          gh release delete ${{ env.previous_release }} --yes
+
+      - name: Check if previous tag exists
+        id: check_tag
+        run: |
+          if [ ! -z "${{ env.previous_release }}" ] && git rev-parse ${{ env.previous_release }} >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_ENV
+          else
+            echo "tag_exists=false" >> $GITHUB_ENV
+          fi
+
+      - name: Delete previous tag
+        if: env.tag_exists == 'true'
+        run: |
+          git tag -d ${{ env.previous_release }}
+          git push --delete origin ${{ env.previous_release }}
+
+      # ===== Get short SHA =====
+      - name: Get short SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      # ===== Create new tag and release =====
+      - name: Create Git Tag
+        id: create_tag
+        run: |
+          VERSION_NAME="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          VERSION_NAME="${VERSION_NAME:-nightly}"
+          TAG="${VERSION_NAME}-build.${{ github.run_number }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Nightly build ${{ github.run_number }}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
+          name: Nightly ${{ steps.create_tag.outputs.tag }}
+          body: |
+            ## ARMSX2 Android Nightly Build
+            **Note:** This Version Only Testing & Single Core
+            - Build number: ${{ github.run_number }}
+            - Commit: ${{ github.sha }}
+            - Short SHA: ${{ env.short_sha }}
+            - Triggered by: ${{ github.actor }}
+            - Flavor: ${{ github.event.inputs.flavor }}
+            - Build type: ${{ github.event.inputs.build_type }}
+          files: |
+            platforms/android/app/build/outputs/apk/${{ steps.build.outputs.FLAVOR_LOWER }}/${{ steps.build.outputs.BUILD_TYPE_LOWER }}/*.apk
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
