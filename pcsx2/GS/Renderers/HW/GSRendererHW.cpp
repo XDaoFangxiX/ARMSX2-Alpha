@@ -7232,6 +7232,56 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 		GSDevice::IsDualSourceBlendFactor(blend.src) || GSDevice::IsDualSourceBlendFactor(blend.dst) ||
 		blend_mix || PABE;
 
+	// ...but blend mix does not always have to give up. It hands the blend unit exactly one number,
+	// the alpha factor, on the PS2's 0..2 scale where 128 is opaque. A second fragment output is the
+	// usual way to carry a value on that scale - it is not the only one. Fixed-function SRC_ALPHA
+	// reads the primary colour output's alpha, and when the target holds its alpha double-scaled
+	// (RTA correction) the shader writes that same number there as well: tfx computes both
+	// alpha_blend and o_col0.a as C.a/128. So the substitution is exact, not an approximation.
+	//
+	// It is worth the trouble because the alternative is not merely slower, it is wrong. Full
+	// software blending needs a fresh destination read per primitive, and a driver with neither a
+	// texture barrier nor a multidraw framebuffer copy can only offer one pre-draw snapshot for the
+	// whole draw. Every primitive after the first then composites against stale pixels - which is
+	// what erodes God of War II's menu glyphs on Mali r44p1, where the text is a single draw whose
+	// drop-shadow and bright quads overlap each other 200 times over.
+	//
+	// Only the plain mix1 shape qualifies. The other mix cases rewrite the second output's RGB
+	// independently of its alpha (the blend_hw types, PABE), so there the two outputs really do
+	// carry different values and no substitution exists.
+	const bool blend_mix1_rewrites_src1 =
+		(m_conf.ps.blend_b == m_conf.ps.blend_d && (alpha_c0_high_min_one || alpha_c1_high_min_one || alpha_c2_high_one)) ||
+		(m_conf.ps.blend_a == m_conf.ps.blend_d);
+	const bool blend_mix_factor_is_alpha =
+		!features.dual_source_blend && blend_mix && blend_mix1 && !blend_mix2 && !blend_mix3 &&
+		!blend_mix1_rewrites_src1 && !blend_ad_alpha_masked && !PABE &&
+		// Only As reaches the blend unit through SRC1; Ad and Af already use DST_ALPHA/CONST_COLOR.
+		m_conf.ps.blend_c == 0 && blend.dst == GSDevice::INV_SRC1_COLOR &&
+		// A shuffle or an fbmask gives the primary output's alpha a meaning of its own.
+		!m_conf.ps.shuffle && !m_conf.ps.fbmask &&
+		// So does an alpha test that feeds the target's old alpha back into the output.
+		m_conf.ps.afail != PS_AFAIL::RGB_ONLY && m_conf.ps.afail != PS_AFAIL::RGB_ONLY_SW_Z;
+
+	// The alpha the shader would write is already the factor when the target holds its alpha
+	// double-scaled: tfx computes both alpha_blend and o_col0.a as C.a/128 under RTA correction. So
+	// scale the target and the substitution costs nothing at all.
+	const bool blend_mix_factor_fits_dst_alpha =
+		blend_mix_factor_is_alpha &&
+		// The primary alpha must still be C.a/128 when it is written, so nothing may rewrite it
+		// downstream of where the factor is captured - 16-bit/FBA alpha correction does.
+		m_conf.ps.dst_fmt == GSLocalMemory::PSM_FMT_32 && !m_conf.ps.fba &&
+		// And the target must be able to hold its alpha double-scaled. can_scale_rt_alpha already
+		// accounts for this draw's own alpha writes, so nothing above 128 is being lost here.
+		(rt->m_rt_alpha_scale || can_scale_rt_alpha);
+
+	// Failing that, the substitution is still free whenever this pass writes no alpha: the output
+	// alpha is discarded on the way to the target, so it may as well carry the factor. That covers a
+	// draw whose alpha is masked outright, and - the case that matters for God of War II - one whose
+	// alpha write has been moved into a second pass by SPLIT_RGB_ONLY.
+	const bool blend_mix_factor_rides_masked_alpha =
+		blend_mix_factor_is_alpha && !blend_mix_factor_fits_dst_alpha &&
+		(m_conf.alpha_test == GSHWDrawConfig::AlphaTestMode::SPLIT_RGB_ONLY);
+
 	const bool force_sw_blending =
 		// If we have fbfetch, use software blending when we need the fb value for anything else.
 		// This saves outputting the second color when it's not needed.
@@ -7243,7 +7293,9 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 
 		// Mobile GPUs (notably Mali) that lack a hardware dual-source blend unit: emulate the
 		// SRC1 equations in-shader for exactly the draws that need it, at any accuracy level.
-		(!features.dual_source_blend && blend_path_requires_dual_source) ||
+		// Unless the factor can ride in the primary output's alpha instead - see above.
+		(!features.dual_source_blend && blend_path_requires_dual_source &&
+			!blend_mix_factor_fits_dst_alpha && !blend_mix_factor_rides_masked_alpha) ||
 
 		// Force SW blending with barriers.
 		GSConfig.UseDebugBlend;
@@ -7504,6 +7556,33 @@ void GSRendererHW::EmulateBlending(int rt_alpha_min, int rt_alpha_max, DATEOptio
 				m_conf.ps.blend_a = 2;
 				m_conf.ps.blend_b = 0;
 				m_conf.ps.blend_d = 0;
+			}
+
+			if (blend_mix_factor_fits_dst_alpha || blend_mix_factor_rides_masked_alpha)
+			{
+				// No second output on this GPU, so hand the blend unit the factor through the
+				// primary output's alpha instead.
+				pxAssert(m_conf.ps.blend_hw == 0);
+
+				if (blend_mix_factor_fits_dst_alpha)
+				{
+					// The alpha this pass writes is the factor already, once the target holds its
+					// alpha double-scaled. Make sure it does; a no-op when it is already scaled.
+					if (!rt->m_rt_alpha_scale)
+					{
+						rt->ScaleRTAlpha();
+						m_conf.rt = rt->m_texture;
+					}
+
+					new_rt_alpha_scale = true;
+				}
+				else
+				{
+					// Nothing is keeping this pass's alpha, so overwrite it with the factor.
+					m_conf.ps.blend_factor_in_alpha = 1;
+				}
+
+				blend.dst = GSDevice::INV_SRC_ALPHA;
 			}
 
 			// Elide DSB colour output if not used by dest or alpha test.
@@ -9203,6 +9282,14 @@ void GSRendererHW::EmulateAlphaTest(DATEOptions& date_options)
 	// hardware dual-source blending. Without it (e.g. Mali), fall to the full path. Per sashkinbro/EmuCoreX.
 	const bool simple_rgb_only =
 		(afail == AFAIL_RGB_ONLY) && independent_z && independent_rgb && features.dual_source_blend;
+	// Without dual source, the same result comes from splitting the draw by *channel* instead of by
+	// fragment. Under RGB_ONLY every fragment writes RGB and only the passing ones write A and Z, so
+	// one pass with the test off writing RGB, then one with the test on writing A and Z, is exact.
+	// It is strictly better than pass/fail, which splits RGB across two passes and so composites
+	// overlapping primitives out of order. It also leaves the first pass with no alpha write at all,
+	// which is what lets a blend mix keep its hardware blend - see EmulateBlending.
+	const bool split_rgb_only =
+		(afail == AFAIL_RGB_ONLY) && independent_z && independent_rgb && !features.dual_source_blend;
 	const bool simple_zb_only = (afail == AFAIL_ZB_ONLY) && independent_z;
 
 	// Determine where RT and/or depth are needed for the feedback methods.
@@ -9234,7 +9321,7 @@ void GSRendererHW::EmulateAlphaTest(DATEOptions& date_options)
 	// The simple cases can be handle accurately in two passes so no point
 	// in requiring barriers if they are not already required.
 	const bool prefer_two_pass = !(free_fbfetch_feedback || free_barrier_feedback) &&
-	                             (simple_fb_only || simple_rgb_only || simple_zb_only);
+	                             (simple_fb_only || simple_rgb_only || split_rgb_only || simple_zb_only);
 	
 	if (prefer_feedback && !prefer_two_pass && !avoid_feedback)
 	{
@@ -9302,6 +9389,28 @@ void GSRendererHW::EmulateAlphaTest(DATEOptions& date_options)
 		// The actual blend setup will be done later after determining blending.
 
 		m_conf.alpha_test = GSHWDrawConfig::AlphaTestMode::SIMPLE_RGB_ONLY;
+	}
+	else if (split_rgb_only)
+	{
+		// First pass writes RGB for every fragment; second pass writes A and Z for the passing ones.
+		GL_INS("Alpha test: RGB for all fragments, then A and Z for passing ones (accurate)");
+
+		// No test on the first pass - under RGB_ONLY, passing and failing fragments write the same RGB.
+		m_conf.ps.atst = PS_ATST::NONE;
+		m_conf.ps.afail = PS_AFAIL::KEEP;
+
+		// Swap stencil DATE for PrimID DATE, for both Z on and off cases.
+		// Because we're making some pixels pass, but not updating A, the stencil won't be synced.
+		if (date_options.enabled && !date_options.barrier && features.primitive_id)
+		{
+			if (!date_options.primid)
+				GL_INS("Alpha test: Swap stencil DATE for PrimID, due to AFAIL");
+
+			date_options.stencil_one = false;
+			date_options.primid = true;
+		}
+
+		m_conf.alpha_test = GSHWDrawConfig::AlphaTestMode::SPLIT_RGB_ONLY;
 	}
 	else
 	{
@@ -9380,6 +9489,28 @@ void GSRendererHW::EmulateAlphaTestSecondPass()
 					m_conf.blend.dst_factor_alpha = GSDevice::INV_SRC1_ALPHA;
 				}
 			}
+		}
+	}
+	else if (m_conf.alpha_test == GSHWDrawConfig::AlphaTestMode::SPLIT_RGB_ONLY)
+	{
+		// Split by channel: the first pass already wrote RGB for every fragment, so all that is left
+		// is what only a passing fragment may write.
+		m_conf.colormask.wa = 0;
+		m_conf.depth.zwe = false;
+
+		m_conf.alpha_second_pass.colormask.wrgba &= 0x8; // Alpha only on second pass
+
+		if (m_conf.alpha_second_pass.colormask.wrgba || m_conf.alpha_second_pass.depth.zwe)
+		{
+			// Enable alpha test and discard failing fragments on second pass.
+			GetAlphaTestConfigPS(atst, aref, false, ps_atst, ps_aref);
+			m_conf.alpha_second_pass.enable = true;
+			m_conf.alpha_second_pass.ps.atst = ps_atst;
+			m_conf.alpha_second_pass.ps_aref = ps_aref;
+			m_conf.alpha_second_pass.ps.afail = PS_AFAIL::KEEP;
+
+			// The factor substitution belongs to the blending pass only; this one writes real alpha.
+			m_conf.alpha_second_pass.ps.blend_factor_in_alpha = 0;
 		}
 	}
 	else
