@@ -115,6 +115,7 @@ jobs:
           export FLAVOR="${{ github.event.inputs.flavor }}"
           chmod +x ci-nightly-dualcore.sh
           ./ci-nightly-dualcore.sh
+          working-directory: platforms/android
         env:
           # Required for dual-core signing (rotation lineage)
           ROTATION_DEBUG_KS: ${{ secrets.ROTATION_DEBUG_KS }}
@@ -127,7 +128,6 @@ jobs:
           ROTATION_RELEASE_KEY_PASS: ${{ secrets.ROTATION_RELEASE_KEY_PASS }}
           # PGO profile defaults to pgo/armsx2.profdata – make sure the file exists in the repo
           # PROF can be overridden if necessary
-          working-directory: platforms/android
 
 
       # ===== 8. Determine APK output path =====
