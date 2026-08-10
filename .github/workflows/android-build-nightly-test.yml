@@ -9,7 +9,7 @@ on:
         type: string
         default: 'nightly'
       build_type:
-        description: 'Build type (only for single-core; dual-core always release)'
+        description: 'Build type (only for single‑core; dual‑core always release)'
         required: true
         default: 'release'
         type: choice
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: platforms/android
+        working-directory: platforms/android   # all steps run here by default
 
     steps:
       # ===== 1. Checkout =====
@@ -72,23 +72,33 @@ jobs:
       - name: Fetch shaderc third-party deps
         run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
 
-      # ===== 4. Discord SDK (optional; adjust if needed) =====
+      # ===== 4. Discord SDK (optional) =====
       - name: Set up Discord SDK
         run: |
           echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
-          # Add download commands here if the SDK must be fetched
+          # Add download/install commands here if needed
 
       # ===== 5. Grant execute permission for gradlew =====
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # ===== 6. Set versionName in build.gradle.kts (single‑core only) =====
+      # ===== 6. Decode signing keystores for dual‑core builds =====
+      - name: Decode rotation signing secrets (dual‑core only)
+        if: github.event.inputs.core_type == 'dual'
+        run: |
+          mkdir -p "$HOME/.android"
+          echo "${{ secrets.ROTATION_DEBUG_KS }}" | base64 -d > "$HOME/.android/debug.keystore"
+          echo "${{ secrets.ROTATION_RELEASE_KS }}" | base64 -d > "$HOME/.android/release.keystore"
+          echo "${{ secrets.ROTATION_LINEAGE }}" | base64 -d > "$HOME/.android/lineage"
+          chmod 600 "$HOME/.android/"*.keystore "$HOME/.android/lineage"
+
+      # ===== 7. Set versionName in build.gradle.kts (single‑core only) =====
       - name: Set versionName in build.gradle.kts (single-core)
         if: github.event.inputs.core_type == 'single'
         run: |
-          sed -i 's/versionName = ".*"/versionName = "${{ github.event.inputs.versionName }}"/' app/build.gradle.kts
+          sed -i 's/versionName\s*=\s*".*"/versionName = "${{ github.event.inputs.versionName }}"/' app/build.gradle.kts
 
-      # ===== 7. Build =====
+      # ===== 8. Build the APK =====
       - name: Build with Gradle (single-core)
         if: github.event.inputs.core_type == 'single'
         id: build_single
@@ -108,29 +118,25 @@ jobs:
       - name: Build dual-core (4k+16k) using dedicated script
         if: github.event.inputs.core_type == 'dual'
         id: build_dual
+        working-directory: platforms/android   # explicit (already inherited)
         run: |
-          working-directory: platforms/android
-          # The script expects VC, VN, FLAVOR, and ROTATION_* environment variables
           export VN="${{ github.event.inputs.versionName }}"
-          export VC="$(date +'%Y%m%d')"   # or use run number
+          export VC="$(date +'%Y%m%d')"   # or use ${{ github.run_number }}
           export FLAVOR="${{ github.event.inputs.flavor }}"
+          export PROF="${PROF:-$PWD/pgo/armsx2.profdata}"
           chmod +x ci-nightly-dualcore.sh
           ./ci-nightly-dualcore.sh
         env:
-          # Required for dual-core signing (rotation lineage)
-          ROTATION_DEBUG_KS: ${{ secrets.ROTATION_DEBUG_KS }}
-          ROTATION_RELEASE_KS: ${{ secrets.ROTATION_RELEASE_KS }}
-          ROTATION_LINEAGE: ${{ secrets.ROTATION_LINEAGE }}
+          ROTATION_DEBUG_KS: ${{ runner.home }}/.android/debug.keystore
+          ROTATION_RELEASE_KS: ${{ runner.home }}/.android/release.keystore
+          ROTATION_LINEAGE: ${{ runner.home }}/.android/lineage
           ROTATION_DEBUG_ALIAS: ${{ secrets.ROTATION_DEBUG_ALIAS }}
           ROTATION_DEBUG_PASS: ${{ secrets.ROTATION_DEBUG_PASS }}
           ROTATION_RELEASE_KEY_ALIAS: ${{ secrets.ROTATION_RELEASE_KEY_ALIAS }}
           ROTATION_RELEASE_KS_PASS: ${{ secrets.ROTATION_RELEASE_KS_PASS }}
           ROTATION_RELEASE_KEY_PASS: ${{ secrets.ROTATION_RELEASE_KEY_PASS }}
-          # PGO profile defaults to pgo/armsx2.profdata – make sure the file exists in the repo
-          # PROF can be overridden if necessary
 
-
-      # ===== 8. Determine APK output path =====
+      # ===== 9. Determine APK output path =====
       - name: Set APK path for single-core
         if: github.event.inputs.core_type == 'single'
         id: apk_path_single
@@ -145,14 +151,11 @@ jobs:
         if: github.event.inputs.core_type == 'dual'
         id: apk_path_dual
         run: |
-          # The script places the APK in app/build/outputs/apk/nightly/
           APK_DIR="app/build/outputs/apk/nightly"
           echo "APK_DIR=${APK_DIR}" >> $GITHUB_ENV
           echo "APK_PATTERN=${APK_DIR}/*.apk" >> $GITHUB_ENV
-          working-directory: platforms/android
 
-
-      # ===== 9. Setup GitHub CLI for release management =====
+      # ===== 10. Setup GitHub CLI for release management =====
       - name: Set up GitHub CLI
         run: |
           sudo apt-get update
@@ -161,7 +164,7 @@ jobs:
       - name: Authenticate GitHub CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      # ===== 10. Delete previous release and tag (if any) =====
+      # ===== 11. Delete previous release and tag (if any) =====
       - name: Get previous release
         id: get_release
         run: |
@@ -188,17 +191,16 @@ jobs:
           git tag -d ${{ env.previous_release }}
           git push --delete origin ${{ env.previous_release }}
 
-      # ===== 11. Get short SHA =====
+      # ===== 12. Get short SHA =====
       - name: Get short SHA
         id: vars
         run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      # ===== 12. Create new tag and release =====
+      # ===== 13. Create new tag and release =====
       - name: Create Git Tag
         id: create_tag
         run: |
           VERSION_NAME="${{ github.event.inputs.versionName }}"
-          # Sanitise the version name to create a valid tag
           TAG="${VERSION_NAME}-build.${{ github.run_number }}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           git config user.name "github-actions[bot]"
