@@ -109,13 +109,13 @@ jobs:
         if: github.event.inputs.core_type == 'dual'
         id: build_dual
         run: |
+          working-directory: platforms/android
           # The script expects VC, VN, FLAVOR, and ROTATION_* environment variables
           export VN="${{ github.event.inputs.versionName }}"
           export VC="$(date +'%Y%m%d')"   # or use run number
           export FLAVOR="${{ github.event.inputs.flavor }}"
           chmod +x ci-nightly-dualcore.sh
           ./ci-nightly-dualcore.sh
-          working-directory: platforms/android
         env:
           # Required for dual-core signing (rotation lineage)
           ROTATION_DEBUG_KS: ${{ secrets.ROTATION_DEBUG_KS }}
