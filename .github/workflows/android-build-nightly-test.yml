@@ -3,11 +3,6 @@ name: Android Build ( Single Core & PGO )
 on:
   workflow_dispatch:
     inputs:
-      versionName:
-        description: 'Version name (e.g., v2.0.0)'
-        required: true
-        type: string
-        default: 'nightly'
       build_type:
         description: "Build type"
         required: true
