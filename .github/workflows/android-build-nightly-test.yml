@@ -127,6 +127,8 @@ jobs:
           ROTATION_RELEASE_KEY_PASS: ${{ secrets.ROTATION_RELEASE_KEY_PASS }}
           # PGO profile defaults to pgo/armsx2.profdata – make sure the file exists in the repo
           # PROF can be overridden if necessary
+          working-directory: platforms/android
+
 
       # ===== 8. Determine APK output path =====
       - name: Set APK path for single-core
@@ -147,6 +149,8 @@ jobs:
           APK_DIR="app/build/outputs/apk/nightly"
           echo "APK_DIR=${APK_DIR}" >> $GITHUB_ENV
           echo "APK_PATTERN=${APK_DIR}/*.apk" >> $GITHUB_ENV
+          working-directory: platforms/android
+
 
       # ===== 9. Setup GitHub CLI for release management =====
       - name: Set up GitHub CLI
