@@ -241,7 +241,7 @@ jobs:
             - Flavor: ${{ github.event.inputs.flavor }}
             - Build type: ${{ github.event.inputs.build_type }}
           files: |
-            platforms/android/app/build/outputs/apk/nightly/${{ steps.build.outputs.FLAVOR_LOWER }}/${{ steps.build.outputs.BUILD_TYPE_LOWER }}/*.apk
+            platforms/android/app/build/outputs/apk/${{ steps.build.outputs.FLAVOR_LOWER }}/${{ steps.build.outputs.BUILD_TYPE_LOWER }}/*.apk
           draft: false
           prerelease: true
           generate_release_notes: false
