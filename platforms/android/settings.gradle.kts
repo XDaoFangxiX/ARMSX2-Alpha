@@ -1,5 +1,9 @@
 pluginManagement {
     repositories {
+        // Resolve plugins from the Gradle Plugin Portal first to ensure external convention plugins
+        // (for example org.gradle.toolchains.foojay-resolver-convention) can be found.
+        gradlePluginPortal()
+        mavenCentral()
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -7,8 +11,6 @@ pluginManagement {
                 includeGroupByRegex("androidx.*")
             }
         }
-        mavenCentral()
-        gradlePluginPortal()
     }
 }
 plugins {
@@ -35,4 +37,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "ARMSX2"
 include(":app")
- 
