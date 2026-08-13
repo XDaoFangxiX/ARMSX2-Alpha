@@ -51,6 +51,17 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
+      - name: Configure Android SDK env and install build-tools
+        run: |
+          # Mirror ANDROID_SDK_ROOT to ANDROID_HOME for compatibility with scripts that expect ANDROID_HOME
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}" >> $GITHUB_ENV
+
+          # Install platform-tools, a platform and build-tools (adjust versions if your project needs different ones)
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}" --licenses
+        shell: bash
+
       - name: Install NDK + CMake
         run: yes | sdkmanager "ndk;28.2.13676358" "cmake;3.31.6" >/dev/null || true
 
@@ -91,7 +102,7 @@ jobs:
           BUILD_TYPE_CAP="$(echo ${BUILD_TYPE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_TYPE:1}"
 
           # Version info
-          VN="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          VN="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -1)"
           VN="${VN:-nightly}"
           VC="${{ github.run_number }}"
 
@@ -217,7 +228,7 @@ jobs:
       - name: Create Git Tag
         id: create_tag
         run: |
-          VERSION_NAME="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          VERSION_NAME="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -1)"
           VERSION_NAME="${VERSION_NAME:-nightly}"
           TAG="${VERSION_NAME}-build.${{ github.run_number }}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
