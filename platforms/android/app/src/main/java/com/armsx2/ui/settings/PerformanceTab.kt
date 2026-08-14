@@ -219,7 +219,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     when (rate) {
                         -6 -> "5%"
                         -5 -> "15%"
-                        -4 -> "30%
+                        -4 -> "30%"
                         -3 -> "50%"
                         -2 -> "60%"
                         -1 -> "75%"
@@ -235,14 +235,33 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 },
                 onChange = { apply(s.copy(eeCycleRate = it)) },
             )
-            SettingsDivider()
+        SettingsDivider()
+        CollapsibleSection(str("perf.speedhacks.title"), initiallyExpanded = true) {
             IntSliderRow(
                 label = str("perf.eeCycleSkip.label"),
                 value = s.eeCycleSkip,
-                min = 0,
-                max = 3,
+                min = -6,
+                max = 6,
                 description = str("perf.eeCycleSkip.description"),
-                onChange = { apply(s.copy(eeCycleSkip = it)) },
+                valueFormatter = { skip ->
+                    when (rate) {
+                        -6 -> "5%"
+                        -5 -> "15%"
+                        -4 -> "30%"
+                        -3 -> "50%"
+                        -2 -> "60%"
+                        -1 -> "75%"
+                        0 -> "100%"
+                        1 -> "130%"
+                        2 -> "180%"
+                        3 -> "300%"
+                        4 -> "400%"
+                        5 -> "450%"
+                        6 -> "500%"
+                        else -> "$skip"
+                    }
+                },
+                onChange = { apply(s.copy(eeCycleRate = it)) },
             )
             SettingsDivider()
             // Recompiler float-clamping accuracy (PCSX2 parity). Higher = more
