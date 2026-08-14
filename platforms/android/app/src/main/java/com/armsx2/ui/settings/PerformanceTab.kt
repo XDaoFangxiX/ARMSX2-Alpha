@@ -212,11 +212,12 @@ fun PerformanceTab(state: MutableState<Settings>) {
             IntSliderRow(
                 label = str("perf.eeCycleRate.label"),
                 value = s.eeCycleRate,
-                min = -3,
-                max = 3,
+                min = -4,
+                max = 4,
                 description = str("perf.eeCycleRate.description"),
                 valueFormatter = { rate ->
                     when (rate) {
+                        -4 -> "25%"
                         -3 -> "50%"
                         -2 -> "60%"
                         -1 -> "75%"
@@ -224,6 +225,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                         1 -> "130%"
                         2 -> "180%"
                         3 -> "300%"
+                        4 -> "500%"
                         else -> "$rate"
                     }
                 },
@@ -313,8 +315,8 @@ fun PerformanceTab(state: MutableState<Settings>) {
             IntSliderRow(
                 label = str("perf.ntscFramerate.label"),
                 value = s.framerateNtsc.roundToInt().coerceIn(20, 75),
-                min = 20,
-                max = 75,
+                min = 5,
+                max = 120,
                 description = str("perf.ntscFramerate.description"),
                 // The true PS2 NTSC rate is 59.94 Hz, which rounds to the "60" stop.
                 // Label that stop honestly and snap it to the exact default, so the
@@ -326,8 +328,8 @@ fun PerformanceTab(state: MutableState<Settings>) {
             IntSliderRow(
                 label = str("perf.palFramerate.label"),
                 value = s.frameratePal.roundToInt().coerceIn(20, 75),
-                min = 20,
-                max = 75,
+                min = 5,
+                max = 120,
                 description = str("perf.palFramerate.description"),
                 valueFormatter = { "$it Hz" },
                 onChange = { apply(s.copy(frameratePal = it.toFloat())) },
@@ -337,7 +339,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 label = str("perf.frameSkip.label"),
                 value = s.frameSkip,
                 min = 0,
-                max = 5,
+                max = 10,
                 description = str("perf.frameSkip.description"),
                 valueFormatter = { if (it == 0) com.armsx2.i18n.I18n.get("common.off") else "Skip $it" },
                 onChange = { apply(s.copy(frameSkip = it)) },
