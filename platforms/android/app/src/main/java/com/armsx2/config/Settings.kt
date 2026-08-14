@@ -782,7 +782,7 @@ data class Settings(
         if (emitSink == null) NativeApp.setFpsCap(fpsLimit.coerceIn(0, 1000))
         // Manual frameskip (0..5) — present 1 of every (N+1) frames. Held as a
         // GS-thread global, applied live; no persisted EmuCore key needed.
-        if (emitSink == null) NativeApp.setFrameSkip(frameSkip.coerceIn(0, 5))
+        if (emitSink == null) NativeApp.setFrameSkip(frameSkip.coerceIn(0, 10))
         if (emitSink == null) NativeApp.setPortraitRenderTop(portraitRenderTop)
         if (emitSink == null) NativeApp.setLandscapeRenderTop(landscapeRenderTop)
         // Audio (SPU2). Volume/mute are live native setters; the rest are written
