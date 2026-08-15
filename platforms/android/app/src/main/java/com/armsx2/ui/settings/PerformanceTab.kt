@@ -212,11 +212,16 @@ fun PerformanceTab(state: MutableState<Settings>) {
             IntSliderRow(
                 label = str("perf.eeCycleRate.label"),
                 value = s.eeCycleRate,
-                min = -6,
+                min = -11,
                 max = 6,
                 description = str("perf.eeCycleRate.description"),
                 valueFormatter = { rate ->
                     when (rate) {
+                        -11 -> "-100%"
+                        -10 -> "-50%"
+                        -9 -> "-30%"
+                        -8 -> "-15%"
+                        -7 -> "-5%"
                         -6 -> "5%"
                         -5 -> "15%"
                         -4 -> "30%"
