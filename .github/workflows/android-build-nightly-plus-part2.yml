@@ -1,0 +1,274 @@
+name: Android Build (Plus 7z)
+
+on:
+  workflow_dispatch:
+    inputs:
+      versionName:
+        description: 'Version name (e.g., v2.0.0)'
+        required: true
+        type: string
+        default: 'nightly'
+      build_type:
+        description: "Build type"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - debug
+          - release
+      flavor:
+        description: 'Build flavor (Github or Play)'
+        required: false
+        type: choice
+        options:
+          - Github
+          - Play
+        default: 'Github'
+      target:
+        description: 'Which APK set to build (all | legacy | a11 | a13 | a15)'
+        required: false
+        type: choice
+        options:
+          - all
+          - legacy
+          - a11
+          - a13
+          - a15
+        default: 'all'
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android Multi‑Target APK Build
+    runs-on: ubuntu-24.04
+    continue-on-error: true   # keep if you want the workflow to continue even if this job fails
+    defaults:
+      run:
+        working-directory: platforms/android
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK + CMake
+        run: yes | sdkmanager "ndk;28.2.13676358" "cmake;3.31.6" >/dev/null || true
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - name: Fetch shaderc third‑party dependencies
+        run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
+
+      - name: Set versionName in build.gradle.kts
+        run: |
+          sed -i 's/versionName = ".*"/versionName = "${{ github.event.inputs.versionName }}"/' app/build.gradle.kts
+
+      - name: Set up Discord SDK (if needed)
+        run: |
+          echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
+          # Add actual download commands here if the SDK must be fetched
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # ------------------------------------------------------------------
+      # Build the four tiered APKs using the multi‑target driver
+      # ------------------------------------------------------------------
+      - name: Build APKs (legacy, a11, a13, a15)
+        id: build
+        run: |
+          set -e
+          ROOT_DIR="${{ github.workspace }}/platforms/android"
+          cd "$ROOT_DIR"
+
+          # Extract version name and code
+          VN="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          VN="${VN:-nightly}"
+          VC="${{ github.run_number }}"
+
+          # Ensure helper scripts are executable
+          chmod +x tools/build-release-apk.sh tools/build-release-targets.sh
+
+          # Target from workflow input (default: all)
+          TARGET="${{ github.event.inputs.target }}"
+          TARGET="${TARGET:-all}"
+
+          # Output directory for the APKs – used by the driver and later steps
+          OUTDIR="$ROOT_DIR/app/build/outputs/apk/${{ github.event.inputs.flavor }}/${{ github.event.inputs.build_type }}"
+          mkdir -p "$OUTDIR"
+
+          # Export environment variables expected by the driver
+          export VC="$VC"
+          export VN="$VN"
+          export OUTDIR="$OUTDIR"
+          # Optional PGO settings – uncomment if you have a profile
+          # export PROF="$ROOT_DIR/app/build/pgo.prof"
+          # export PGO_MODE=optimize
+
+          # Run the multi‑target driver
+          tools/build-release-targets.sh "$TARGET"
+
+          # Pass the APK directory to subsequent steps
+          echo "APK_DIR=${OUTDIR}" >> $GITHUB_OUTPUT
+        env:
+          DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
+
+      # ------------------------------------------------------------------
+      # Sign all generated APKs (only for release builds)
+      # ------------------------------------------------------------------
+      - name: Sign release APKs
+        if: github.event.inputs.build_type == 'release'
+        run: |
+          KEYSTORE_PATH="${HOME}/.android/release.keystore"
+          KEY_ALIAS="${KEY_ALIAS:-armsx2-ci}"
+          KS_PASSWORD="${KEYSTORE_PASSWORD:-armsx2-ci-temp}"
+          KEY_PASSWORD="${KEY_PASSWORD:-armsx2-ci-temp}"
+
+          mkdir -p "${HOME}/.android"
+          if [ ! -f "$KEYSTORE_PATH" ]; then
+            echo "Generating CI keystore for signing..."
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE_PATH" \
+              -storetype PKCS12 \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$KS_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -dname "CN=ARMSX2 CI, OU=CI, O=CI, L=CI, S=CI, C=US" \
+              2>/dev/null
+          fi
+
+          BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -n 1)
+          APK_DIR="${{ steps.build.outputs.APK_DIR }}"
+
+          # Sign every APK found in the output directory
+          for APK in "${APK_DIR}"/*.apk; do
+            if [ -f "$APK" ]; then
+              echo "Signing $APK"
+              "${BUILD_TOOLS_DIR}/apksigner" sign \
+                --ks "$KEYSTORE_PATH" \
+                --ks-pass "pass:${KS_PASSWORD}" \
+                --key-pass "pass:${KEY_PASSWORD}" \
+                --ks-key-alias "$KEY_ALIAS" \
+                "$APK"
+              "${BUILD_TOOLS_DIR}/apksigner" verify --verbose "$APK"
+            fi
+          done
+
+      # ------------------------------------------------------------------
+      # Compress all APKs into a single ultra‑compressed .7z archive
+      # ------------------------------------------------------------------
+      - name: Install p7zip for ultra compression
+        run: sudo apt-get install -y p7zip-full
+
+      - name: Compress APKs to .7z (ultra)
+        id: compress
+        run: |
+          APK_DIR="${{ steps.build.outputs.APK_DIR }}"
+          VERSION_NAME="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          VERSION_NAME="${VERSION_NAME:-nightly}"
+          BUILD_NUM="${{ github.run_number }}"
+          ARCHIVE_NAME="armsx2-android-${VERSION_NAME}-build-${BUILD_NUM}.7z"
+          cd "$APK_DIR"
+          7z a -t7z -mx=9 -mfb=273 -ms=on -mmt=on "$ARCHIVE_NAME" *.apk
+          mv "$ARCHIVE_NAME" "${{ github.workspace }}/"
+          echo "ARCHIVE_PATH=${{ github.workspace }}/$ARCHIVE_NAME" >> $GITHUB_ENV
+          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------------
+      # GitHub Release handling (delete old, create new tag, upload assets)
+      # ------------------------------------------------------------------
+      - name: Set up GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Get previous release
+        id: get_release
+        run: |
+          previous_release=$(gh release list --limit 1 --json tagName -q '.[].tagName')
+          echo "previous_release=$previous_release" >> $GITHUB_ENV
+
+      - name: Delete previous release
+        if: env.previous_release != ''
+        run: |
+          gh release delete ${{ env.previous_release }} --yes
+
+      - name: Check if previous tag exists
+        id: check_tag
+        run: |
+          if [ ! -z "${{ env.previous_release }}" ] && git rev-parse ${{ env.previous_release }} >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_ENV
+          else
+            echo "tag_exists=false" >> $GITHUB_ENV
+          fi
+
+      - name: Delete previous tag
+        if: env.tag_exists == 'true'
+        run: |
+          git tag -d ${{ env.previous_release }}
+          git push --delete origin ${{ env.previous_release }}
+
+      - name: Get short SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Create Git tag
+        id: create_tag
+        run: |
+          VERSION_NAME="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+          VERSION_NAME="${VERSION_NAME:-nightly}"
+          TAG="${VERSION_NAME}-build.${{ github.run_number }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Nightly build ${{ github.run_number }}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
+          name: Nightly ${{ steps.create_tag.outputs.tag }}
+          body: |
+            ## ARMSX2 Android Nightly Build (Multi‑Target)
+            This release contains **four tiered APKs** for different Android versions and CPU capabilities, packaged in a single ultra‑compressed `.7z` archive.
+
+            - Build number: ${{ github.run_number }}
+            - Commit: ${{ github.sha }}
+            - Short SHA: ${{ env.short_sha }}
+            - Triggered by: ${{ github.actor }}
+            - Flavor: ${{ github.event.inputs.flavor }}
+            - Build type: ${{ github.event.inputs.build_type }}
+            - Targets: ${{ github.event.inputs.target || 'all' }}
+
+            **How to use:**  
+            Download the `.7z` archive, extract it, and install the APK that matches your device (legacy, a11, a13, or a15).  
+            For devices with Android 8.0+ and 64‑bit CPU, prefer the **a15** APK for best performance.
+          files: |
+            ${{ env.ARCHIVE_PATH }}
+            # If you also want to upload the individual APKs, uncomment the next line:
+            # ${{ steps.build.outputs.APK_DIR }}/*.apk
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
