@@ -819,6 +819,35 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         onReset = { viewModel.setUpscale(1.0f) },
         onChange = { pct -> viewModel.setUpscale(pct / 100f) },
     )
+    // FSR sits with the resolution controls rather than the effects, because that is what it
+    // is: the two rows above choose how big the frame is RENDERED, and this chooses how it
+    // gets to the screen. In full settings it lives under Display Effects next to CAS, which
+    // is the wrong shelf for finding it while you are looking at the framerate.
+    // "auto" is the DEFAULT and resolves to Vulkan on Android, so gating on the literal string
+    // "vulkan" hid this row from almost everyone — which is exactly what happened. Only OpenGL
+    // and software genuinely cannot run it.
+    if (settings.renderer != "opengl" && settings.renderer != "software") {
+        val fsr1On = settings.upscaler == com.armsx2.config.Settings.UPSCALER_FSR1
+        MenuSwitchRow(
+            str("renderer.fsr1.label"),
+            fsr1On,
+            description = str("renderer.fsr1.description"),
+        ) { on ->
+            viewModel.updateSettings {
+                it.copy(upscaler = if (on) com.armsx2.config.Settings.UPSCALER_FSR1 else com.armsx2.config.Settings.UPSCALER_OFF)
+            }
+        }
+        if (fsr1On) {
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str("renderer.fsr1.sharpness.label"),
+                value = settings.fsrSharpness.coerceIn(0, 100),
+                min = 0,
+                max = 100,
+                valueFormatter = { "$it%" },
+                onChange = { pct -> viewModel.updateSettings { it.copy(fsrSharpness = pct) } },
+            )
+        }
+    }
     HorizontalOptions(
         title = str("renderer.displayMode.label"),
         options = listOf(
@@ -1070,6 +1099,30 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     }
     MenuSwitchRow(str("perf.hack.waitLoop"), settings.waitLoop) {
         viewModel.updateSettings { current -> current.copy(waitLoop = it) }
+    }
+    // Frame generation, in its own card: it changes what is PRESENTED rather than what is
+    // emulated, so it does not belong among the speedhacks above. Github flavour only — the
+    // section returns immediately when BuildConfig.LSFG is false, taking the card with it.
+    if (com.armsx2.BuildConfig.LSFG) {
+        SectionCard(str("perf.lsfg.label")) {
+            com.armsx2.ui.common.LsfgSection(
+                enabled = settings.lsfgEnabled,
+                multiplier = settings.lsfgMultiplier,
+                dllPath = settings.lsfgDllPath,
+                performance = settings.lsfgPerformance,
+                flowScale = settings.lsfgFlowScale,
+            ) { on, mult, dll, perf, flow ->
+                viewModel.updateSettings {
+                    it.copy(
+                        lsfgEnabled = on,
+                        lsfgMultiplier = mult,
+                        lsfgDllPath = dll,
+                        lsfgPerformance = perf,
+                        lsfgFlowScale = flow,
+                    )
+                }
+            }
+        }
     }
     SectionCard(str("tab.recompiler")) {
         MenuSwitchRow("EE (R5900)", settings.recEE) { value -> viewModel.updateSettings { it.copy(recEE = value) } }
