@@ -343,6 +343,27 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 onChange = { apply(s.copy(frameSkip = it)) },
             )
         }
+        // Frame generation. Its own group above the speedhacks because it is not one: it
+        // changes what is PRESENTED, not what is emulated, and it is the only row here that
+        // depends on a file the user has to supply. Github flavour only — the section
+        // returns immediately when BuildConfig.LSFG is false.
+        SettingsDivider()
+        com.armsx2.ui.common.LsfgSection(
+            enabled = s.lsfgEnabled,
+            multiplier = s.lsfgMultiplier,
+            dllPath = s.lsfgDllPath,
+            performance = s.lsfgPerformance,
+            flowScale = s.lsfgFlowScale,
+        ) { on, mult, dll, perf, flow ->
+            apply(s.copy(
+                lsfgEnabled = on,
+                lsfgMultiplier = mult,
+                lsfgDllPath = dll,
+                lsfgPerformance = perf,
+                lsfgFlowScale = flow,
+            ))
+        }
+
         SettingsDivider()
         CollapsibleSection(str("perf.advancedSpeedhacks.title")) {
             Spacer(Modifier.height(8.dp))

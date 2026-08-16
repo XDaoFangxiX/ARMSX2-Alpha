@@ -479,6 +479,9 @@ enum class GSUpscaler : u8
 {
 	Off,           ///< Plain bilinear present-time stretch (default).
 	MetalFXSpatial, ///< Apple MetalFX spatial upscaler (Metal backend, macOS 13+).
+	// Appended rather than inserted: this enum is persisted as an integer, so renumbering
+	// MetalFXSpatial would silently re-point every existing config at a different upscaler.
+	FSR1,          ///< AMD FidelityFX Super Resolution 1 (EASU + RCAS compute passes, Vulkan).
 };
 
 enum class GSHWAutoFlushLevel : u8
@@ -1053,7 +1056,26 @@ struct Pcsx2Config
 		bool ShaderChainEnabled = false;
 		std::string ShaderChainPreset;
 
+		// LSFG — Lossless Scaling frame generation, inserted into the Vulkan present path.
+		// Off unless the user both enables it AND supplies their own Lossless.dll: the
+		// interpolation shaders are read out of that file at runtime and nothing about them
+		// ships with ARMSX2. Vulkan + Adreno 7xx and newer only, and compiled out entirely
+		// in the play flavour, so every one of these is inert in a build without it.
+		bool LsfgEnabled = false;
+		u8 LsfgMultiplier = 2; // frames displayed per rendered frame: 2 = one interpolated
+		std::string LsfgDllPath;
+		// LSFG 3.1p, a lighter shader family than 3.1. Default on: this runs on a phone GPU
+		// that is already presenting the game, and the cheaper pipeline is what makes the
+		// feature pay for itself there. Falls back to 3.1 when the user's DLL predates 3.1p.
+		bool LsfgPerformance = true;
+		// Optical-flow resolution, as a percentage of the presented image (25..100). Lower is
+		// cheaper and blurrier. Handed to the library as a DIVISOR — see GSLsfg.cpp.
+		u8 LsfgFlowScale = 100;
+
 		u8 CAS_Sharpness = 50;
+		// FSR1's RCAS pass, 0..100. Mapped to AMD's "stops" scale in GSDevice::FSR1Upscale,
+		// where 0 stops is maximum sharpening - it is not the same curve as CAS_Sharpness.
+		u8 FSR_Sharpness = 50;
 		u8 ShadeBoost_Brightness = DEFAULT_SHADEBOOST_BRIGHTNESS;
 		u8 ShadeBoost_Contrast = DEFAULT_SHADEBOOST_CONTRAST;
 		u8 ShadeBoost_Saturation = DEFAULT_SHADEBOOST_SATURATION;

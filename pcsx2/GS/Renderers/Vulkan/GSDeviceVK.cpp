@@ -6,6 +6,7 @@
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
 #include "GS/Renderers/Vulkan/GSDeviceVK.h"
+#include "GS/Renderers/Vulkan/GSLsfg.h"
 #include "GS/Renderers/Vulkan/VKBuilders.h"
 #include "GS/Renderers/Vulkan/VKShaderCache.h"
 #include "GS/Renderers/Vulkan/VKSwapChain.h"
@@ -63,6 +64,7 @@ namespace
 #include <limits>
 #include <mutex>
 #include <sstream>
+#include <utility>
 
 // Tweakables
 enum : u32
@@ -1679,6 +1681,23 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 
 	if (present_swap_chain)
 	{
+		// Consumed here rather than only reset in BeginPresent: RenderBlankFrame() presents
+		// without going through BeginPresent at all, so a flag left set by the last real frame
+		// would tell frame generation that a cleared image was fresh game output.
+		const bool has_new_frame = std::exchange(m_present_has_new_frame, false);
+
+		// Frame generation replaces this present entirely: it consumes the rendering-finished
+		// semaphore for its own copy, then presents the interpolated frames and the real one in
+		// order. It returns false without consuming anything if it cannot run this frame, which
+		// is the ordinary path on every build and device without it.
+		if (GSLsfg::IsActive() &&
+			GSLsfg::PresentWithGeneration(m_present_queue, present_swap_chain,
+				present_swap_chain->GetRenderingFinishedSemaphore(), has_new_frame))
+		{
+			present_swap_chain->AcquireNextImage();
+			return;
+		}
+
 		const VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, nullptr, 1,
 			present_swap_chain->GetRenderingFinishedSemaphorePtr(), 1, present_swap_chain->GetSwapChainPtr(),
 			present_swap_chain->GetCurrentImageIndexPtr(), nullptr};
@@ -2614,6 +2633,15 @@ bool GSDeviceVK::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		m_features.cas_sharpening = false;
 	}
 
+	// Same non-fatal treatment as CAS above, and for the same reason: FSR1 is two more compute
+	// pipelines, so a driver that chokes on CAS's will likely choke on these too. Leaving
+	// Features().fsr1 false makes GSRenderer fall back to the plain bilinear present.
+	if (!CompileFSR1Pipelines())
+	{
+		Console.Warning("VK: FSR1 pipeline compilation failed - disabling FSR1 upscaling.");
+		m_features.fsr1 = false;
+	}
+
 	if (!CompileImGuiPipeline())
 		return false;
 
@@ -2642,6 +2670,10 @@ void GSDeviceVK::Destroy()
 	// Free the filter chain before the device goes away — it owns Vulkan objects created
 	// against m_device, so tearing the device down first would leak/UB them.
 	DestroyShaderChain();
+
+	// Same reasoning for frame generation, which additionally holds AHardwareBuffers shared
+	// with a second VkDevice it owns; its Shutdown idles both before releasing anything.
+	GSLsfg::Shutdown();
 
 	EndRenderPass();
 	if (GetCurrentCommandBuffer() != VK_NULL_HANDLE)
@@ -3038,6 +3070,16 @@ void GSDeviceVK::EndPresent()
 	m_swap_chain->GetCurrentTexture()->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::PresentSrc);
 	g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 
+	// Bring frame generation up or down to match the settings, once per frame and immediately
+	// before the present it hooks. Both calls are cheap no-ops in the steady state; the work
+	// happens only when the toggle, the multiplier, or the swapchain geometry actually changed.
+	// The path goes in first because availability is partly a question about that file.
+	GSLsfg::SetDllPath(GSConfig.LsfgDllPath);
+	if (GSConfig.LsfgEnabled && GSLsfg::IsAvailable())
+		GSLsfg::Initialize(m_swap_chain.get(), GSConfig.LsfgMultiplier);
+	else if (GSLsfg::IsActive())
+		GSLsfg::Shutdown();
+
 	SubmitCommandBuffer(m_swap_chain.get());
 	MoveToNextCommandBuffer();
 
@@ -3396,6 +3438,22 @@ bool GSDeviceVK::CheckFeatures()
 	// This is what constrains texture/target caching on weaker Mali (e.g. G615). From EmuCoreX.
 	SetMobileGPUIdentity(mobile_profile.gpu);
 	SetMobileGSTuning(mobile_profile.gs_tuning);
+
+	// Hand the resolved architecture to frame generation, which needs Adreno 7xx or newer. Done
+	// here rather than asked for on demand so the settings screen can still say WHY the row is
+	// unavailable after the game stops and the device is gone.
+	{
+		u32 adreno_generation = 0;
+		switch (mobile_profile.gpu.architecture)
+		{
+			case MobileGpuArchitecture::Adreno7xx: adreno_generation = 7; break;
+			case MobileGpuArchitecture::Adreno8xx: adreno_generation = 8; break;
+			// Adreno X (X1-85 and up) postdates 7xx and carries the same feature set.
+			case MobileGpuArchitecture::AdrenoX: adreno_generation = 9; break;
+			default: break;
+		}
+		GSLsfg::NoteRendererCapability(true, adreno_generation);
+	}
 #endif
 	Console.WriteLn("VK: GPU profile override='%s' resolved='%s' driver='%s' version=%u.%u.%u "
 					"raw=%08x rules=%u bugs=%016llx workarounds=%016llx.",
@@ -5991,6 +6049,54 @@ bool GSDeviceVK::CompileCASPipelines()
 	return true;
 }
 
+bool GSDeviceVK::CompileFSR1Pipelines()
+{
+	VkDevice dev = m_device;
+	Vulkan::DescriptorSetLayoutBuilder dslb;
+	Vulkan::PipelineLayoutBuilder plb;
+
+	if (m_use_push_descriptors)
+		dslb.SetPushFlag();
+	// Combined image sampler, not SAMPLED_IMAGE as CAS uses: EASU reads through textureGather,
+	// which needs a sampler bound to the image.
+	dslb.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+	dslb.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+	if ((m_fsr1_ds_layout = dslb.Create(dev)) == VK_NULL_HANDLE)
+		return false;
+	Vulkan::SetObjectName(dev, m_fsr1_ds_layout, "FSR1 descriptor layout");
+
+	plb.AddPushConstants(VK_SHADER_STAGE_COMPUTE_BIT, 0, NUM_FSR1_CONSTANTS * sizeof(u32));
+	plb.AddDescriptorSet(m_fsr1_ds_layout);
+	if ((m_fsr1_pipeline_layout = plb.Create(dev)) == VK_NULL_HANDLE)
+		return false;
+	Vulkan::SetObjectName(dev, m_fsr1_pipeline_layout, "FSR1 pipeline layout");
+
+	// Two modules from two differently-#define'd copies of the same file, where CAS gets away
+	// with one module and a specialization constant: FSR_EASU_F/FSR_RCAS_F decide which function
+	// bodies ffx_fsr1.h emits, so a specialization constant would leave both calls unresolved.
+	for (u8 easu_pass = 0; easu_pass < NUM_FSR1_PIPELINES; easu_pass++)
+	{
+		std::optional<std::string> fsr1_source = ReadShaderSource("shaders/vulkan/fsr1.glsl");
+		if (!fsr1_source.has_value() || !GetFSR1ShaderSource(&fsr1_source.value(), easu_pass != 0))
+			return false;
+
+		VkShaderModule mod = g_vulkan_shader_cache->GetComputeShader(fsr1_source->c_str());
+		if (mod == VK_NULL_HANDLE)
+			return false;
+		ScopedGuard mod_guard = [this, &mod]() { vkDestroyShaderModule(m_device, mod, nullptr); };
+
+		Vulkan::ComputePipelineBuilder cpb;
+		cpb.SetPipelineLayout(m_fsr1_pipeline_layout);
+		cpb.SetShader(mod, "main");
+		m_fsr1_pipelines[easu_pass] = cpb.Create(dev, g_vulkan_shader_cache->GetPipelineCache(true), false);
+		if (!m_fsr1_pipelines[easu_pass])
+			return false;
+	}
+
+	m_features.fsr1 = true;
+	return true;
+}
+
 bool GSDeviceVK::CompileImGuiPipeline()
 {
 	const std::optional<std::string> glsl = ReadShaderSource("shaders/vulkan/imgui.glsl");
@@ -6263,6 +6369,108 @@ bool GSDeviceVK::DoCAS(
 	return true;
 }
 
+bool GSDeviceVK::DoFSR1EASU(GSTexture* sTex, GSTexture* dTex, const std::array<u32, NUM_FSR1_CONSTANTS>& constants)
+{
+	return DoFSR1Pass(sTex, dTex, true, constants);
+}
+
+bool GSDeviceVK::DoFSR1RCAS(GSTexture* sTex, GSTexture* dTex, const std::array<u32, NUM_FSR1_CONSTANTS>& constants)
+{
+	return DoFSR1Pass(sTex, dTex, false, constants);
+}
+
+bool GSDeviceVK::DoFSR1Pass(
+	GSTexture* sTex, GSTexture* dTex, bool easu_pass, const std::array<u32, NUM_FSR1_CONSTANTS>& constants)
+{
+	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
+
+	EndRenderPass();
+
+	GSTextureVK* const sTexVK = static_cast<GSTextureVK*>(sTex);
+	GSTextureVK* const dTexVK = static_cast<GSTextureVK*>(dTex);
+	VkCommandBuffer cmdbuf = GetCurrentCommandBuffer();
+
+	// The EASU intermediate is handed to RCAS in compute and so never leaves GENERAL, which
+	// defeats both of the backend's usual tools: Layout::ShaderReadOnly's barrier targets
+	// VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT and would not make compute stores visible to a
+	// compute read, and TransitionToLayout() early-outs when the layout already matches, so
+	// re-requesting ComputeReadWriteImage emits nothing at all. Anything already in GENERAL
+	// therefore needs its compute<->compute dependency stated by hand.
+	const auto compute_barrier = [cmdbuf](GSTextureVK* tex, VkAccessFlags src_access, VkAccessFlags dst_access) {
+		const VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, src_access, dst_access,
+			VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+			tex->GetImage(), {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u}};
+		vkCmdPipelineBarrier(cmdbuf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+			nullptr, 0, nullptr, 1, &barrier);
+	};
+
+	if (sTexVK->GetLayout() == GSTextureVK::Layout::ComputeReadWriteImage)
+	{
+		// RCAS reading EASU's output. Without this it reads undefined data.
+		compute_barrier(sTexVK, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+	}
+	else
+	{
+		// EASU's input is the merged display texture, arriving from a colour-attachment write
+		// exactly as CAS's does.
+		sTexVK->TransitionToLayout(cmdbuf, GSTextureVK::Layout::ShaderReadOnly);
+	}
+
+	if (dTexVK->GetLayout() == GSTextureVK::Layout::ComputeReadWriteImage)
+	{
+		// Every frame after the first: the intermediate was left in GENERAL for RCAS to read, so
+		// this is what orders EASU's writes against the previous frame's RCAS reads of it.
+		compute_barrier(dTexVK, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+	}
+	else
+	{
+		dTexVK->TransitionToLayout(cmdbuf, GSTextureVK::Layout::ComputeReadWriteImage);
+	}
+
+	// EASU gathers with normalised coordinates, so it needs the linear/clamp-to-edge sampler;
+	// RCAS only texelFetches and ignores the sampler entirely.
+	const VkSampler sampler = easu_pass ? m_linear_sampler : m_point_sampler;
+
+	// only happening once a frame, so the update isn't a huge deal.
+	Vulkan::DescriptorSetUpdateBuilder dsub;
+	if (m_use_push_descriptors)
+	{
+		dsub.AddCombinedImageSamplerDescriptorWrite(VK_NULL_HANDLE, 0, sTexVK->GetView(), sampler, sTexVK->GetVkLayout());
+		dsub.AddStorageImageDescriptorWrite(VK_NULL_HANDLE, 1, dTexVK->GetView(), dTexVK->GetVkLayout());
+		dsub.PushUpdate(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, m_fsr1_pipeline_layout, 0, false);
+	}
+	else
+	{
+		VkDescriptorSet ds = AllocateDescriptorSetFromFramePool(m_fsr1_ds_layout);
+		if (ds == VK_NULL_HANDLE) [[unlikely]]
+			return false; // two allocs per frame after EndRenderPass - exhaustion implausible; skip the pass
+		dsub.AddCombinedImageSamplerDescriptorWrite(ds, 0, sTexVK->GetView(), sampler, sTexVK->GetVkLayout());
+		dsub.AddStorageImageDescriptorWrite(ds, 1, dTexVK->GetView(), dTexVK->GetVkLayout());
+		dsub.Update(m_device);
+		vkCmdBindDescriptorSets(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, m_fsr1_pipeline_layout, 0, 1, &ds, 0, nullptr);
+	}
+
+	static const int threadGroupWorkRegionDim = 16;
+	const int dispatchX = (dTex->GetWidth() + (threadGroupWorkRegionDim - 1)) / threadGroupWorkRegionDim;
+	const int dispatchY = (dTex->GetHeight() + (threadGroupWorkRegionDim - 1)) / threadGroupWorkRegionDim;
+
+	// Full 80 bytes for both passes. RCAS only reads Const0, but the shared block puts `Sample`
+	// at byte 64 either way, and it is read unconditionally - a 32-byte push leaves it undefined
+	// and the shader squares the image.
+	vkCmdPushConstants(cmdbuf, m_fsr1_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+		NUM_FSR1_CONSTANTS * sizeof(u32), constants.data());
+	vkCmdBindPipeline(cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, m_fsr1_pipelines[static_cast<u8>(easu_pass)]);
+	vkCmdDispatch(cmdbuf, dispatchX, dispatchY, 1);
+
+	// The EASU target goes straight into RCAS in compute, so leave it in GENERAL and let the
+	// barrier at the top of the next pass order the two dispatches. Only RCAS's output is handed
+	// to the present pass, which samples it from the fragment stage.
+	if (!easu_pass)
+		dTexVK->TransitionToLayout(GSTextureVK::Layout::ShaderReadOnly);
+
+	return true;
+}
+
 void GSDeviceVK::DestroyResources()
 {
 	if (m_tfx_ubo_descriptor_set != VK_NULL_HANDLE)
@@ -6326,6 +6534,17 @@ void GSDeviceVK::DestroyResources()
 		vkDestroyPipelineLayout(m_device, m_cas_pipeline_layout, nullptr);
 	if (m_cas_ds_layout != VK_NULL_HANDLE)
 		vkDestroyDescriptorSetLayout(m_device, m_cas_ds_layout, nullptr);
+
+	for (VkPipeline it : m_fsr1_pipelines)
+	{
+		if (it != VK_NULL_HANDLE)
+			vkDestroyPipeline(m_device, it, nullptr);
+	}
+	if (m_fsr1_pipeline_layout != VK_NULL_HANDLE)
+		vkDestroyPipelineLayout(m_device, m_fsr1_pipeline_layout, nullptr);
+	if (m_fsr1_ds_layout != VK_NULL_HANDLE)
+		vkDestroyDescriptorSetLayout(m_device, m_fsr1_ds_layout, nullptr);
+
 	if (m_imgui_pipeline != VK_NULL_HANDLE)
 		vkDestroyPipeline(m_device, m_imgui_pipeline, nullptr);
 
