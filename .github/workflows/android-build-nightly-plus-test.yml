@@ -1,4 +1,4 @@
-name: Android Build (Plus DualCore)
+name: Android Build (Plus Test)
 
 on:
   workflow_dispatch:
