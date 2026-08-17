@@ -1916,8 +1916,8 @@ data class Settings(
 
         /** One-tap "Ultra-Low-End" performance snapshot applied on top of [base].
          *  Only cheap, safe-for-most levers that already exist as fields:
-         *    - accurate_blending_unit = Minimum (0)   — cheapest blend path
-         *    - internal resolution   = 1x (native)     — biggest GPU win
+         *    - accurate_blending_unit = Basic (1)   — cheapest blend path
+         *    - internal resolution   = 0.5x (Low)     — biggest GPU win
          *    - hw mipmap off, GPU palette conversion off — drop optional GPU work
          *    - texture preloading    = Partial (1)      — lower upload stalls
          *    - HW ROV off                                — never a win on tilers
@@ -1932,7 +1932,7 @@ data class Settings(
          *  field wired in this build. 
          * Recommanded For Weak / Low End Device. */
         fun ultraLowEndPreset(base: Settings, mtvu: Boolean): Settings = base.copy(
-            accurateBlendingUnit = 0,   // Minimum
+            accurateBlendingUnit = 1,   // Basic
             upscaleFloat = 0.5f,        // native resolution
             hwMipmap = false,           // mipmap off
             gpuPaletteConversion = false,
