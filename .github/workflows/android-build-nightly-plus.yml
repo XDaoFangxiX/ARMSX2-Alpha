@@ -165,13 +165,15 @@ jobs:
           # Copy universal APK to the standard output folder (so the release step can find it)
           OUTDIR="$ROOT_DIR/app/build/outputs/apk/${FLAVOR_LOWER}/${BUILD_TYPE_LOWER}"
           mkdir -p "$OUTDIR"
-          cp -f "$ALN" "$OUTDIR/app-${FLAVOR_LOWER}-${BUILD_TYPE_LOWER}-universal.apk"
+          # ---- NEW: include versionName in the APK file name ----
+          cp -f "$ALN" "$OUTDIR/armsx2-${VN}-${FLAVOR_LOWER}-${BUILD_TYPE_LOWER}.apk"
           # Optionally remove individual APKs to avoid clutter
           rm -f "$BUILT" "$WORK/base-*.apk"
 
           # Set outputs for later steps
           echo "FLAVOR_LOWER=${FLAVOR_LOWER}" >> $GITHUB_OUTPUT
           echo "BUILD_TYPE_LOWER=${BUILD_TYPE_LOWER}" >> $GITHUB_OUTPUT
+          echo "versionName=${VN}" >> $GITHUB_OUTPUT   # <-- added
         env:
           DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
 
@@ -202,7 +204,8 @@ jobs:
           fi
           
           BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -n 1)
-          APK_PATH="${{ github.workspace }}/platforms/android/app/build/outputs/apk/${{ steps.build.outputs.FLAVOR_LOWER }}/${{ steps.build.outputs.BUILD_TYPE_LOWER }}/app-${{ steps.build.outputs.FLAVOR_LOWER }}-${{ steps.build.outputs.BUILD_TYPE_LOWER }}-universal.apk"
+          # ---- updated APK path with versionName ----
+          APK_PATH="${{ github.workspace }}/platforms/android/app/build/outputs/apk/${{ steps.build.outputs.FLAVOR_LOWER }}/${{ steps.build.outputs.BUILD_TYPE_LOWER }}/armsx2-${{ steps.build.outputs.versionName }}-${{ steps.build.outputs.FLAVOR_LOWER }}-${{ steps.build.outputs.BUILD_TYPE_LOWER }}.apk"
           
           echo "Signing APK: ${APK_PATH}"
           "${BUILD_TOOLS_DIR}/apksigner" sign \
@@ -274,6 +277,7 @@ jobs:
           body: |
             ## ARMSX2 Android Nightly Build (Dual Core)
             **Note:** This build includes both 4K and 16K page size cores.
+            - Version: ${{ steps.build.outputs.versionName }}
             - Build number: ${{ github.run_number }}
             - Commit: ${{ github.sha }}
             - Short SHA: ${{ env.short_sha }}
