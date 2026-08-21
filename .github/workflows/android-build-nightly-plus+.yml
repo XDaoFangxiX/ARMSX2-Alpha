@@ -84,7 +84,7 @@ jobs:
           cd "$ROOT_DIR"
 
           # Fixed parameters for the legacy target (safe for all ARMv8.0 devices)
-          MINSDK=24
+          MINSDK=26
           NDK_VER="29.0.14206865"
           MARCH="armv8-a"
           MARCH_EXTRA="-moutline-atomics"
@@ -124,7 +124,7 @@ jobs:
           mkdir -p "$WORK/lib-stage/lib/arm64-v8a"
 
           # Final output APK name (updater‑compatible)
-          FINAL_APK="ARMSX2-${VN}-legacy-armv8.0-sdk24.apk"
+          FINAL_APK="ARMSX2-${VN}-legacy-armv8.0-sdk26.apk"
           OUTDIR="$ROOT_DIR/app/build/outputs/apk/legacy"
           mkdir -p "$OUTDIR"
 
