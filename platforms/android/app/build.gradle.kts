@@ -247,6 +247,30 @@ android {
             buildConfigField("boolean", "LSFG", "false")
             externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=OFF" } }
         }
+        create("antutu") {
+            dimension = "store"
+            applicationId = "com.antutu.ABenchMark"
+            buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "LSFG", "true")
+            externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=ON" } }
+        }
+        create("ludashi") {
+            dimension = "store"
+            applicationId = "com.ludashi.benchmark"
+            buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "LSFG", "true")
+            externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=ON" } }
+        }
+        create("pubg") {
+            dimension = "store"
+            applicationId = "com.tencent.ig"
+            buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "LSFG", "true")
+            externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=ON" } }
+        }
     }
     // Merge the generated bin/resources tree in as a second assets root. Passing
     // the task's output provider (not a bare path) makes AGP's asset-merge tasks
