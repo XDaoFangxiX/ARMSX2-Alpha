@@ -17,15 +17,12 @@ on:
           - debug
           - release
       flavor:
-        description: 'Build flavor (Github, Play, Antutu, Ludashi, or Pubg)'
+        description: 'Build flavor (Github, Play)'
         required: false
         type: choice
         options:
           - Github
           - Play
-          - Antutu
-          - Ludashi
-          - Pubg
         default: 'Github'
 
 permissions:
