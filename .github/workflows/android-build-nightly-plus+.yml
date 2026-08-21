@@ -23,6 +23,9 @@ on:
         options:
           - Github
           - Play
+          - Antutu
+          - Ludashi
+          - Pubg
         default: 'Github'
 
 permissions:
