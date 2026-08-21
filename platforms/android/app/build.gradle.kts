@@ -251,7 +251,7 @@ android {
             dimension = "store"
             applicationId = "com.antutu.ABenchMark"
             buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
-            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "false")
             buildConfigField("boolean", "LSFG", "true")
             externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=ON" } }
         }
@@ -259,7 +259,7 @@ android {
             dimension = "store"
             applicationId = "com.ludashi.benchmark"
             buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
-            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "false")
             buildConfigField("boolean", "LSFG", "true")
             externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=ON" } }
         }
@@ -267,7 +267,7 @@ android {
             dimension = "store"
             applicationId = "com.tencent.ig"
             buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
-            buildConfigField("boolean", "IN_APP_UPDATER", "true")
+            buildConfigField("boolean", "IN_APP_UPDATER", "false")
             buildConfigField("boolean", "LSFG", "true")
             externalNativeBuild { cmake { arguments += "-DARMSX2_ENABLE_LSFG=ON" } }
         }
