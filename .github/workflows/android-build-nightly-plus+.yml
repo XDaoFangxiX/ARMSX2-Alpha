@@ -35,7 +35,7 @@ jobs:
   android:
     name: Android APK (Dual Core)
     runs-on: ubuntu-24.04
-    continue-on-error: true
+    # Removed 'continue-on-error: true' – fail fast on errors
     defaults:
       run:
         working-directory: platforms/android
@@ -54,9 +54,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      # Install NDK 29 (used for the legacy target) and CMake
+      # Install NDK 29 and CMake (fail if installation fails – removed '|| true')
       - name: Install NDK + CMake
-        run: yes | sdkmanager "ndk;29.0.14206865" "cmake;3.31.6" >/dev/null || true
+        run: yes | sdkmanager "ndk;29.0.14206865" "cmake;3.31.6" >/dev/null
 
       - name: Install Rust Android target
         run: rustup target add aarch64-linux-android
@@ -66,22 +66,24 @@ jobs:
 
       - name: Set versionName in build.gradle.kts
         run: |
-          sed -i 's/versionName = ".*"/versionName = "${{ github.event.inputs.versionName }}"/' app/build.gradle.kts
+          VN="${{ github.event.inputs.versionName }}"
+          sed -i 's/versionName = ".*"/versionName = "'"$VN"'"/' app/build.gradle.kts
 
+      # Ensure the Discord SDK is present (adjust download URL as needed)
       - name: Set up Discord SDK
         run: |
           echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
-          # Add download commands here if the SDK needs to be fetched from somewhere
+          # Uncomment and adapt if the SDK must be downloaded:
+          # wget -q -O discord-sdk.zip https://dl-game-sdk.discordapp.net/latest/discord_game_sdk.zip && unzip -q discord-sdk.zip -d ${{ github.workspace }}/discord-sdk
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # ===== Build the selected legacy APK (dual‑core + PGO) =====
+      # ===== Build the legacy APK (dual‑core + PGO) =====
       - name: Build Legacy APK (dual‑core, PGO)
         id: build
         run: |
-          set -e
-
+          set -e  # Exit on any error
           ROOT_DIR="${{ github.workspace }}/platforms/android"
           GRADLE="$ROOT_DIR/gradlew"
           cd "$ROOT_DIR"
@@ -92,60 +94,50 @@ jobs:
           MARCH="armv8-a"
           MARCH_EXTRA="-moutline-atomics"
 
-          # Version info
-          VN="$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-          VN="${VN:-nightly}"
+          # Version info – use input directly
+          VN="${{ github.event.inputs.versionName }}"
           VC="${{ github.run_number }}"
 
           # PGO profile path (adjust if your build produces it elsewhere)
           PROF="$ROOT_DIR/pgo/armsx2.profdata"
 
-          # find zipalign
-          if [ -z "$ANDROID_HOME" ]; then
-            echo "ANDROID_HOME not set" >&2
-            exit 1
-          fi
-          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name zipalign -type f | sort -V | tail -1)
-          if [ -z "$ZIPALIGN" ]; then
-            echo "zipalign not found" >&2
-            exit 1
-          fi
-          echo "ZIPALIGN=$ZIPALIGN"
-
-          # --- PGO: use profile if available, else fall back to none ---
           if [[ -f "$PROF" ]]; then
             PGO_ARGS=(-Parmsx2.pgo=optimize -Parmsx2.pgoProfile="$PROF")
-            echo "PGO: optimising using $PROF ($(( $(wc -c < "$PROF") / 1024 / 1024 )) MB)"
+            PGO_ENABLED="enabled"
           else
             PGO_ARGS=(-Parmsx2.pgo=none)
-            echo "WARNING: PGO profile not found at $PROF — building without PGO (slower core)." >&2
+            PGO_ENABLED="disabled"
+            echo "WARNING: PGO profile not found at $PROF – building without PGO (slower core)." >&2
           fi
+          echo "pgo_enabled=${PGO_ENABLED}" >> $GITHUB_OUTPUT
 
-          # Read the selected flavor from input
+          # Determine build tools directory once
+          BUILD_TOOLS_DIR="$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -1)"
+          ZIPALIGN="${BUILD_TOOLS_DIR}/zipalign"
+          echo "Using build-tools: $BUILD_TOOLS_DIR"
+
+          # Flavor handling
           FLAVOR_INPUT="${{ github.event.inputs.flavor }}"
-          # Convert to lowercase for Gradle paths and capitalize first letter for task name
           FLAVOR_LOWER="$(echo "$FLAVOR_INPUT" | tr '[:upper:]' '[:lower:]')"
-          FLAVOR_CAP="$(echo "$FLAVOR_INPUT" | sed 's/.*/\u&/')"   # e.g. "Github" -> "Github"
+          FLAVOR_CAP="$(echo "$FLAVOR_INPUT" | sed 's/.*/\u&/')"
           echo "Selected flavor: $FLAVOR_INPUT (task: assemble${FLAVOR_CAP}Release)"
 
-          # Working directory for assembling the two cores (per flavor)
+          # Working directory for assembling the two cores
           WORK="$ROOT_DIR/app/build/nightly-dualcore/${FLAVOR_LOWER}"
           rm -rf "$WORK"
           mkdir -p "$WORK/lib-stage/lib/arm64-v8a"
 
-          # Final output APK name (includes flavor and legacy info)
           FINAL_APK="ARMSX2-${VN}-${FLAVOR_LOWER}-legacy-armv8.0-sdk26.apk"
           OUTDIR="$ROOT_DIR/app/build/outputs/apk/legacy"
           mkdir -p "$OUTDIR"
 
-          # Helper to get file size (Linux / macOS compatible)
+          # Helper for file size
           fsizef() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1"; }
 
           build_core() {
             local ps="$1" ln="$2"
             echo "=== Building core: $ln (page size $ps) for flavor $FLAVOR_INPUT ==="
 
-            # Gradle assemble – we force the legacy parameters for every core
             "$GRADLE" -p "$ROOT_DIR" ":app:assemble${FLAVOR_CAP}Release" \
               -Parmsx2.hostPageSize="$ps" \
               -Parmsx2.nativeLibName="$ln" \
@@ -158,31 +150,26 @@ jobs:
               -Parmsx2.versionName="$VN" \
               --stacktrace
 
-            # Gradle writes the APK to app/build/outputs/apk/<flavor>/release/app-<flavor>-release.apk
             BUILT="$ROOT_DIR/app/build/outputs/apk/${FLAVOR_LOWER}/release/app-${FLAVOR_LOWER}-release.apk"
             [[ -f "$BUILT" ]] || { echo "FATAL: Gradle did not produce an APK for $ln" >&2; exit 1; }
-            # Verify that the native library is inside
             unzip -l "$BUILT" "lib/arm64-v8a/lib${ln}.so" >/dev/null \
               || { echo "FATAL: lib${ln}.so missing from APK" >&2; exit 1; }
 
-            # Save the base APK and extract the .so for later merging
             cp -f "$BUILT" "$WORK/base-${ln}.apk"
             unzip -p "$BUILT" "lib/arm64-v8a/lib${ln}.so" > "$WORK/lib-stage/lib/arm64-v8a/lib${ln}.so"
           }
 
-          # Build the two cores with different page sizes
           build_core 0x1000 emucore_4k
           build_core 0x4000 emucore_16k
 
-          # Sanity check: libraries should be large enough
+          # Verify library sizes
           for so in emucore_4k emucore_16k; do
             sz="$(fsizef "$WORK/lib-stage/lib/arm64-v8a/lib${so}.so")"
             echo "  lib${so}.so = $(( sz / 1024 / 1024 )) MB"
             [[ "$sz" -gt 10000000 ]] || { echo "FATAL: lib${so}.so too small ($sz bytes)" >&2; exit 1; }
           done
 
-          # --- Merge: use the 4K APK as base, remove old signatures and both .so files,
-          # then add both freshly built .so files back (stored, not compressed) ---
+          # Merge APK: base = 4K APK, remove signatures and old .so files, add both new .so files (stored uncompressed)
           UNS="$WORK/universal-unsigned.apk"
           ALN="$WORK/universal-aligned.apk"
           cp -f "$WORK/base-emucore_4k.apk" "$UNS"
@@ -191,13 +178,9 @@ jobs:
           ( cd "$WORK/lib-stage" && zip -qr -0 "$UNS" lib )
           "$ZIPALIGN" -f -P 16 4 "$UNS" "$ALN"
 
-          # Move the final APK to the output directory with the required name
           cp -f "$ALN" "$OUTDIR/$FINAL_APK"
-
-          # Clean up intermediate APKs
           rm -f "$WORK/base-*.apk"
 
-          # Set outputs for later steps
           echo "FINAL_APK=$FINAL_APK" >> $GITHUB_OUTPUT
           echo "OUTDIR=$OUTDIR" >> $GITHUB_OUTPUT
           echo "versionName=$VN" >> $GITHUB_OUTPUT
@@ -209,13 +192,19 @@ jobs:
       - name: Sign release APK
         if: github.event.inputs.build_type == 'release'
         run: |
+          set -e
           KEYSTORE_PATH="${HOME}/.android/release.keystore"
-          KEY_ALIAS="${KEY_ALIAS:-armsx2-ci}"
-          KS_PASSWORD="${KEYSTORE_PASSWORD:-armsx2-ci-temp}"
-          KEY_PASSWORD="${KEY_PASSWORD:-armsx2-ci-temp}"
+          KEY_ALIAS="armsx2-ci"
+          # Use secrets – if not provided, fallback to temporary (not recommended for production)
+          KS_PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}"
+          KEY_PASSWORD="${{ secrets.KEY_PASSWORD }}"
+          if [ -z "$KS_PASSWORD" ]; then
+            echo "WARNING: No keystore password secret set – using temporary insecure password." >&2
+            KS_PASSWORD="armsx2-ci-temp"
+            KEY_PASSWORD="armsx2-ci-temp"
+          fi
 
           mkdir -p "${HOME}/.android"
-
           if [ ! -f "$KEYSTORE_PATH" ]; then
             echo "Generating CI keystore for signing..."
             keytool -genkeypair -v \
@@ -231,7 +220,7 @@ jobs:
               2>/dev/null
           fi
 
-          BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -n 1)
+          BUILD_TOOLS_DIR="$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -1)"
           APK_PATH="${{ steps.build.outputs.OUTDIR }}/${{ steps.build.outputs.FINAL_APK }}"
 
           echo "Signing APK: ${APK_PATH}"
@@ -245,7 +234,7 @@ jobs:
           echo "Verifying signature..."
           "${BUILD_TOOLS_DIR}/apksigner" verify --verbose "$APK_PATH"
 
-      # ===== GitHub Release steps (unchanged) =====
+      # ===== GitHub Release steps =====
       - name: Set up GitHub CLI
         run: |
           sudo apt-get update
@@ -254,41 +243,28 @@ jobs:
       - name: Authenticate GitHub CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      - name: Get previous release
-        id: get_release
+      - name: Delete previous nightly release and tag (if any)
         run: |
-          previous_release=$(gh release list --limit 1 --json tagName -q '.[].tagName')
-          echo "previous_release=$previous_release" >> $GITHUB_ENV
-
-      - name: Delete previous release
-        if: env.previous_release != ''
-        run: |
-          gh release delete ${{ env.previous_release }} --yes
-
-      - name: Check if previous tag exists
-        id: check_tag
-        run: |
-          if [ ! -z "${{ env.previous_release }}" ] && git rev-parse ${{ env.previous_release }} >/dev/null 2>&1; then
-            echo "tag_exists=true" >> $GITHUB_ENV
+          set -e
+          VN="${{ steps.build.outputs.versionName }}"
+          # Match tags like "v2.0.0-build.123"
+          TAG_PATTERN="${VN}-build.*"
+          EXISTING_TAG=$(gh release list --json tagName -q ".[] | select(.tagName | test(\"${TAG_PATTERN}\")) | .tagName" | head -1)
+          if [ -n "$EXISTING_TAG" ]; then
+            echo "Deleting existing release and tag: $EXISTING_TAG"
+            gh release delete "$EXISTING_TAG" --yes || true
+            git tag -d "$EXISTING_TAG" || true
+            git push --delete origin "$EXISTING_TAG" || true
           else
-            echo "tag_exists=false" >> $GITHUB_ENV
+            echo "No previous nightly release found for version $VN"
           fi
-
-      - name: Delete previous tag
-        if: env.tag_exists == 'true'
-        run: |
-          git tag -d ${{ env.previous_release }}
-          git push --delete origin ${{ env.previous_release }}
-
-      - name: Get short SHA
-        id: vars
-        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Create Git Tag
         id: create_tag
         run: |
-          VERSION_NAME="${{ steps.build.outputs.versionName }}"
-          TAG="${VERSION_NAME}-build.${{ github.run_number }}"
+          set -e
+          VN="${{ steps.build.outputs.versionName }}"
+          TAG="${VN}-build.${{ github.run_number }}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -306,11 +282,11 @@ jobs:
             - Version: ${{ steps.build.outputs.versionName }}
             - Build number: ${{ github.run_number }}
             - Commit: ${{ github.sha }}
-            - Short SHA: ${{ env.short_sha }}
+            - Short SHA: ${{ github.sha }}
             - Triggered by: ${{ github.actor }}
             - Flavor: ${{ steps.build.outputs.flavor }}
             - Build type: ${{ github.event.inputs.build_type }}
-            - PGO: ${{ (contains(github.event.head_commit.message, 'pgo') && 'enabled') || 'auto' }}
+            - PGO: ${{ steps.build.outputs.pgo_enabled }}
           files: |
             ${{ steps.build.outputs.OUTDIR }}/${{ steps.build.outputs.FINAL_APK }}
           draft: false
