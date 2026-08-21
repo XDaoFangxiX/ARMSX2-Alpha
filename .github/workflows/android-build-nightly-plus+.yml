@@ -98,7 +98,7 @@ jobs:
           VC="${{ github.run_number }}"
 
           # PGO profile path (adjust if your build produces it elsewhere)
-          PROF="$ROOT_DIR/app/build/pgo.prof"
+          PROF="$ROOT_DIR/app/build/pgo.profdata"
 
           # find zipalign
           if [ -z "$ANDROID_HOME" ]; then
