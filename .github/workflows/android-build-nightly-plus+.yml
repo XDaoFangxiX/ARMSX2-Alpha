@@ -17,7 +17,7 @@ on:
           - debug
           - release
       flavor:
-        description: 'Build flavor (Github or Play)'
+        description: 'Build flavor (Github, Play, Antutu, Ludashi, or Pubg)'
         required: false
         type: choice
         options:
@@ -76,7 +76,7 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # ===== Build the single legacy APK (dual‑core + PGO) =====
+      # ===== Build the selected legacy APK (dual‑core + PGO) =====
       - name: Build Legacy APK (dual‑core, PGO)
         id: build
         run: |
@@ -121,13 +121,20 @@ jobs:
             echo "WARNING: PGO profile not found at $PROF — building without PGO (slower core)." >&2
           fi
 
-          # Working directory for assembling the two cores
-          WORK="$ROOT_DIR/app/build/nightly-dualcore"
+          # Read the selected flavor from input
+          FLAVOR_INPUT="${{ github.event.inputs.flavor }}"
+          # Convert to lowercase for Gradle paths and capitalize first letter for task name
+          FLAVOR_LOWER="$(echo "$FLAVOR_INPUT" | tr '[:upper:]' '[:lower:]')"
+          FLAVOR_CAP="$(echo "$FLAVOR_INPUT" | sed 's/.*/\u&/')"   # e.g. "Github" -> "Github"
+          echo "Selected flavor: $FLAVOR_INPUT (task: assemble${FLAVOR_CAP}Release)"
+
+          # Working directory for assembling the two cores (per flavor)
+          WORK="$ROOT_DIR/app/build/nightly-dualcore/${FLAVOR_LOWER}"
           rm -rf "$WORK"
           mkdir -p "$WORK/lib-stage/lib/arm64-v8a"
 
-          # Final output APK name (updater‑compatible)
-          FINAL_APK="ARMSX2-${VN}-legacy-armv8.0-sdk26.apk"
+          # Final output APK name (includes flavor and legacy info)
+          FINAL_APK="ARMSX2-${VN}-${FLAVOR_LOWER}-legacy-armv8.0-sdk26.apk"
           OUTDIR="$ROOT_DIR/app/build/outputs/apk/legacy"
           mkdir -p "$OUTDIR"
 
@@ -136,10 +143,10 @@ jobs:
 
           build_core() {
             local ps="$1" ln="$2"
-            echo "=== Building core: $ln (page size $ps) ==="
+            echo "=== Building core: $ln (page size $ps) for flavor $FLAVOR_INPUT ==="
 
             # Gradle assemble – we force the legacy parameters for every core
-            "$GRADLE" -p "$ROOT_DIR" ":app:assembleGithubRelease" \
+            "$GRADLE" -p "$ROOT_DIR" ":app:assemble${FLAVOR_CAP}Release" \
               -Parmsx2.hostPageSize="$ps" \
               -Parmsx2.nativeLibName="$ln" \
               -Parmsx2.minSdk="$MINSDK" \
@@ -151,8 +158,8 @@ jobs:
               -Parmsx2.versionName="$VN" \
               --stacktrace
 
-            # Gradle writes the APK to app/build/outputs/apk/github/release/app-github-release.apk
-            BUILT="$ROOT_DIR/app/build/outputs/apk/github/release/app-github-release.apk"
+            # Gradle writes the APK to app/build/outputs/apk/<flavor>/release/app-<flavor>-release.apk
+            BUILT="$ROOT_DIR/app/build/outputs/apk/${FLAVOR_LOWER}/release/app-${FLAVOR_LOWER}-release.apk"
             [[ -f "$BUILT" ]] || { echo "FATAL: Gradle did not produce an APK for $ln" >&2; exit 1; }
             # Verify that the native library is inside
             unzip -l "$BUILT" "lib/arm64-v8a/lib${ln}.so" >/dev/null \
@@ -194,6 +201,7 @@ jobs:
           echo "FINAL_APK=$FINAL_APK" >> $GITHUB_OUTPUT
           echo "OUTDIR=$OUTDIR" >> $GITHUB_OUTPUT
           echo "versionName=$VN" >> $GITHUB_OUTPUT
+          echo "flavor=$FLAVOR_INPUT" >> $GITHUB_OUTPUT
         env:
           DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
 
@@ -300,7 +308,7 @@ jobs:
             - Commit: ${{ github.sha }}
             - Short SHA: ${{ env.short_sha }}
             - Triggered by: ${{ github.actor }}
-            - Flavor: ${{ github.event.inputs.flavor }}
+            - Flavor: ${{ steps.build.outputs.flavor }}
             - Build type: ${{ github.event.inputs.build_type }}
             - PGO: ${{ (contains(github.event.head_commit.message, 'pgo') && 'enabled') || 'auto' }}
           files: |
