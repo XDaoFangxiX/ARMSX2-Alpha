@@ -100,6 +100,7 @@ set(pcsx2Sources
 	Patch.cpp
 	Pcsx2Config.cpp
 	PerformanceMetrics.cpp
+	PerGameOverrides.cpp
 	PrecompiledHeader.cpp
 	R3000A.cpp
 	R3000AInterpreter.cpp
@@ -187,6 +188,7 @@ set(pcsx2Headers
 	no-jit-improvements.h
 	Patch.h
 	PerformanceMetrics.h
+	PerGameOverrides.h
 	PrecompiledHeader.h
 	R3000A.h
 	R5900.h
@@ -691,21 +693,59 @@ if(USE_VULKAN)
 		GS/Renderers/Vulkan/VKStreamBuffer.cpp
 		GS/Renderers/Vulkan/VKSwapChain.cpp
 	)
-	# GSLsfg.cpp is the ONE translation unit in PCSX2 built with exceptions.
+	# Frame generation ported from Eden (eden-emu PR #4263).
 	#
-	# The rest of the emulator is -fno-exceptions, and stays that way. But LSFG's entire error
-	# protocol is throwing — initialize(), createContextFromAHB() and presentContext() all raise
-	# LSFG::vulkan_error, and the DXBC translator raises on a malformed shader — so without this
-	# there is no way to survive a bad Lossless.dll or an unsupported driver. The alternative,
-	# letting those propagate into -fno-exceptions frames, is std::terminate: a hard crash on the
-	# exact paths this feature is most likely to take on someone else's device.
+	# Gated on ARMSX2_ENABLE_LSFG rather than on ARMSX2_HAVE_LSFG, and the difference matters:
+	# ARMSX2_ENABLE_LSFG arrives as a -D on the CMake command line from the Android gradle
+	# flavour, so it is in the cache before any subdirectory is processed. ARMSX2_HAVE_LSFG is
+	# set by 3rdparty/lsfg, which is added AFTER this file — testing it here would silently
+	# evaluate false and drop every source below, producing a build that succeeds with the
+	# feature missing. Desktop builds never define either, so they skip this entirely.
 	#
-	# The boundary is airtight by construction: GSLsfg.cpp catches (...) at every call into the
-	# library and returns a bool, so nothing ever unwinds into GSDeviceVK. Skipping the PCH is
-	# required, not incidental — clang rejects a -fno-exceptions PCH from a -fexceptions TU.
-	set_source_files_properties(GS/Renderers/Vulkan/GSLsfg.cpp PROPERTIES
-		COMPILE_OPTIONS "-fexceptions"
-		SKIP_PRECOMPILE_HEADERS ON)
+	# Nothing here needs -fexceptions. The old lsfg-vk-android library reported failure by
+	# throwing, which cost GSLsfg.cpp a -fexceptions + no-PCH carve-out; the Eden port has zero
+	# throw sites and returns status enums, so the whole feature builds under the emulator's
+	# normal -fno-exceptions and GSLsfg.cpp is back on the PCH with everything else.
+	if(ARMSX2_ENABLE_LSFG)
+		list(APPEND pcsx2GSSources
+			GS/Renderers/Vulkan/FrameGen/FrameGen.cpp
+			GS/Renderers/Vulkan/FrameGen/FrameGenPacer.cpp
+			GS/Renderers/Vulkan/FrameGen/LosslessDll.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgAlpha.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgBeta.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgChain.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgCommon.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgDelta.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgGamma.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgGenerate.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgMipmaps.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgShaders.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgTranslate.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgUtil.cpp
+			GS/Renderers/Vulkan/FrameGen/LsfgVkCompat.cpp
+		)
+		list(APPEND pcsx2GSHeaders
+			GS/Renderers/Vulkan/FrameGen/FrameGen.h
+			GS/Renderers/Vulkan/FrameGen/FrameGenPacer.h
+			GS/Renderers/Vulkan/FrameGen/FrameGenTypes.h
+			GS/Renderers/Vulkan/FrameGen/LosslessDll.h
+			GS/Renderers/Vulkan/FrameGen/LsfgAlpha.h
+			GS/Renderers/Vulkan/FrameGen/LsfgBeta.h
+			GS/Renderers/Vulkan/FrameGen/LsfgChain.h
+			GS/Renderers/Vulkan/FrameGen/LsfgCommon.h
+			GS/Renderers/Vulkan/FrameGen/LsfgDelta.h
+			GS/Renderers/Vulkan/FrameGen/LsfgGamma.h
+			GS/Renderers/Vulkan/FrameGen/LsfgGenerate.h
+			GS/Renderers/Vulkan/FrameGen/LsfgMipmaps.h
+			GS/Renderers/Vulkan/FrameGen/LsfgShaders.h
+			GS/Renderers/Vulkan/FrameGen/LsfgTranslate.h
+			GS/Renderers/Vulkan/FrameGen/LsfgUtil.h
+			GS/Renderers/Vulkan/FrameGen/LsfgVkCompat.h
+		)
+		# The ported sources include each other by bare filename, as they did upstream.
+		target_include_directories(PCSX2_FLAGS INTERFACE
+			"${CMAKE_CURRENT_SOURCE_DIR}/GS/Renderers/Vulkan/FrameGen")
+	endif()
 
 	# VKLibretro.cpp needs the libretro Vulkan HW-render interface header.
 	# Link it PRIVATE to PCSX2 (not the shared PCSX2_FLAGS) so the header path
