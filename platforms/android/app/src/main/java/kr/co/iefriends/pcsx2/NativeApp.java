@@ -174,7 +174,7 @@ public class NativeApp {
 	 * {@link #reloadPatches()} to apply. Writing the .pnach file alone is NOT
 	 * enough — a patch is inert unless its name is enabled here.
 	 */
-	public static native void setEnabledPatches(boolean cheats, String[] allNames, String[] enabledNames);
+	public static native void setEnabledPatches(boolean cheats, String[] allNames, String[] enabledNames, String serial);
 	/**
 	 * One-time repair: drop the GLOBAL [Patches]/[Cheats] "Enable" lists.
 	 * <p>
@@ -182,7 +182,6 @@ public class NativeApp {
 	 * patches are enabled by NAME those entries armed the same-named group in the bundled pnach
 	 * archive for every game. Per-game lists are left alone. Call once, gated on a pref.
 	 */
-	public static native void purgeGlobalPatchEnableLists();
 
 	// ---- USB lightgun (GunCon 2) ----------------------------------------------
 	/** GunCon2 binding ids, from pcsx2/USB/usb-lightgun/guncon2.cpp. */
