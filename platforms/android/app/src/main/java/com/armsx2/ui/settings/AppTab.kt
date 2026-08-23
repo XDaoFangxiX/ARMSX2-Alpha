@@ -845,7 +845,7 @@ fun AppTab() {
 
         IntSliderRow(
             label = str("app.library.coverSize"),
-            value = (com.armsx2.ui.UiScale.coverScale.value * 100f).toInt().coerceIn(75, 250),
+            value = (com.armsx2.ui.UiScale.coverScale.value * 100f).toInt().coerceIn(30, 250),
             min = 30,
             max = 250,
             valueFormatter = { "$it%" },
