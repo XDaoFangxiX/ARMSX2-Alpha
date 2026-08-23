@@ -104,10 +104,10 @@ object LibraryMusic {
 
     /** Set the music volume (0..100) and apply it live to a playing track. */
     fun setVolume(percent: Int) {
-        val p = percent.coerceIn(0, 100)
+        val p = percent.coerceIn(0, 150)
         volumePercent.value = p
         MainActivityRuntime.prefs.edit { putInt(VolumeKey, p) }
-        val g = p / 100f
+        val g = p / 150f
         runCatching { player?.setVolume(g, g) }
     }
 
