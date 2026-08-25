@@ -483,6 +483,7 @@ enum class GSUpscaler : u8
 	// MetalFXSpatial would silently re-point every existing config at a different upscaler.
 	FSR1,          ///< AMD FidelityFX Super Resolution 1 (EASU + RCAS compute passes, Vulkan).
 	SGSR,          ///< Qualcomm Snapdragon Game Super Resolution 1 (single compute pass, Vulkan).
+	SGSREdge,      ///< SGSR's edge-direction variant: same pass, directional Lanczos, dearer.
 };
 
 enum class GSHWAutoFlushLevel : u8
@@ -1085,9 +1086,20 @@ struct Pcsx2Config
 		u16 LsfgTargetRate = 0;
 
 		u8 CAS_Sharpness = 50;
-		// FSR1's RCAS pass, 0..100. Mapped to AMD's "stops" scale in GSDevice::FSR1Upscale,
+		// 0..100, shared by the upscalers. FSR1 maps it to AMD's "stops" scale and SGSR to its
+		// own 0..2 edge sharpness, two percent per percent, so both reach their full range off
+		// one control. FSR1's RCAS pass, 0..100. Mapped to AMD's "stops" scale in GSDevice::FSR1Upscale,
 		// where 0 stops is maximum sharpening - it is not the same curve as CAS_Sharpness.
 		u8 FSR_Sharpness = 50;
+
+		// SGSR's own, deliberately NOT shared with FSR_Sharpness above.
+		//
+		// Qualcomm's edge sharpness runs 0..2 and FSR1's slider is natively 0..100, so the two
+		// want different ranges. Reusing one field would mean an existing FSR configuration
+		// silently means something else the moment SGSR is picked, and widening that field to
+		// 200 would change what every FSR value already stored out there means. Neither is worth
+		// saving one setting. 100 here is Qualcomm's default of 1.0.
+		u8 SGSR_Sharpness = 100;
 		u8 ShadeBoost_Brightness = DEFAULT_SHADEBOOST_BRIGHTNESS;
 		u8 ShadeBoost_Contrast = DEFAULT_SHADEBOOST_CONTRAST;
 		u8 ShadeBoost_Saturation = DEFAULT_SHADEBOOST_SATURATION;
