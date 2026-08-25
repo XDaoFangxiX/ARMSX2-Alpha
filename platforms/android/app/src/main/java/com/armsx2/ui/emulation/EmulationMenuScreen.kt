@@ -864,31 +864,41 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         // screen is the SECOND place that has to learn about a new one -- the settings tab has
         // its own copy of the same control, and updating only that one leaves the in-game menu
         // silently unable to reach the new option.
-        val fsr1On = settings.upscaler == com.armsx2.config.Settings.UPSCALER_FSR1 ||
-            settings.upscaler == com.armsx2.config.Settings.UPSCALER_SGSR
+        val sgsrOn = settings.upscaler == com.armsx2.config.Settings.UPSCALER_SGSR ||
+            settings.upscaler == com.armsx2.config.Settings.UPSCALER_SGSR_EDGE
+        val fsr1On = settings.upscaler == com.armsx2.config.Settings.UPSCALER_FSR1 || sgsrOn
         HorizontalOptions(
             title = str("renderer.upscaler.label"),
             options = listOf(
                 com.armsx2.config.Settings.UPSCALER_OFF to str("common.off"),
                 com.armsx2.config.Settings.UPSCALER_FSR1 to "FSR 1",
                 com.armsx2.config.Settings.UPSCALER_SGSR to "SGSR",
+                com.armsx2.config.Settings.UPSCALER_SGSR_EDGE to "SGSR Edge",
             ),
             selected = if (fsr1On) settings.upscaler else com.armsx2.config.Settings.UPSCALER_OFF,
             onSelect = { v -> viewModel.updateSettings { it.copy(upscaler = v) } },
         )
         if (fsr1On) {
-            com.armsx2.ui.settings.IntSliderRow(
-                label = str(
-                    if (settings.upscaler == com.armsx2.config.Settings.UPSCALER_SGSR)
-                        "renderer.sgsr.sharpness.label"
-                    else "renderer.fsr1.sharpness.label",
-                ),
-                value = settings.fsrSharpness.coerceIn(0, 100),
-                min = 0,
-                max = 100,
-                valueFormatter = { "$it%" },
-                onChange = { pct -> viewModel.updateSettings { it.copy(fsrSharpness = pct) } },
-            )
+            // Separate settings, separate ranges — see the note in RendererTab.
+            if (sgsrOn) {
+                com.armsx2.ui.settings.IntSliderRow(
+                    label = str("renderer.sgsr.sharpness.label"),
+                    value = settings.sgsrSharpness.coerceIn(0, 200),
+                    min = 0,
+                    max = 200,
+                    valueFormatter = { "$it%" },
+                    onChange = { pct -> viewModel.updateSettings { it.copy(sgsrSharpness = pct) } },
+                )
+            } else {
+                com.armsx2.ui.settings.IntSliderRow(
+                    label = str("renderer.fsr1.sharpness.label"),
+                    value = settings.fsrSharpness.coerceIn(0, 100),
+                    min = 0,
+                    max = 100,
+                    valueFormatter = { "$it%" },
+                    onChange = { pct -> viewModel.updateSettings { it.copy(fsrSharpness = pct) } },
+                )
+            }
         }
     }
     HorizontalOptions(
