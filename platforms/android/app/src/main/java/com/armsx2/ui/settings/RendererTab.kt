@@ -424,18 +424,18 @@ fun RendererTab(state: MutableState<Settings>) {
                 if (sgsrOn) {
                     IntSliderRow(
                         label = str("renderer.sgsr.sharpness.label"),
-                        value = s.sgsrSharpness.coerceIn(0, 200),
+                        value = s.sgsrSharpness.coerceIn(0, 800),
                         min = 0,
-                        max = 200,
+                        max = 800,
                         valueFormatter = { "$it%" },
                         onChange = { apply(s.copy(sgsrSharpness = it)) },
                     )
                 } else {
                     IntSliderRow(
                         label = str("renderer.fsr1.sharpness.label"),
-                        value = s.fsrSharpness.coerceIn(0, 100),
+                        value = s.fsrSharpness.coerceIn(0, 800),
                         min = 0,
-                        max = 100,
+                        max = 800,
                         valueFormatter = { "$it%" },
                         onChange = { apply(s.copy(fsrSharpness = it)) },
                     )
