@@ -1101,7 +1101,7 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     )
     HorizontalOptions(
         title = str("perf.eeCycleRate.label"),
-        options = (-3..3).map { it to if (it > 0) "+$it" else "$it" },
+        options = (-6..6).map { it to if (it > 0) "+$it" else "$it" },
         selected = settings.eeCycleRate,
         onSelect = viewModel::setEeCycleRate,
     )
