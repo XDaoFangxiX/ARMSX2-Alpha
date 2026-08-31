@@ -883,18 +883,18 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             if (sgsrOn) {
                 com.armsx2.ui.settings.IntSliderRow(
                     label = str("renderer.sgsr.sharpness.label"),
-                    value = settings.sgsrSharpness.coerceIn(0, 200),
+                    value = settings.sgsrSharpness.coerceIn(0, 800),
                     min = 0,
-                    max = 200,
+                    max = 800,
                     valueFormatter = { "$it%" },
                     onChange = { pct -> viewModel.updateSettings { it.copy(sgsrSharpness = pct) } },
                 )
             } else {
                 com.armsx2.ui.settings.IntSliderRow(
                     label = str("renderer.fsr1.sharpness.label"),
-                    value = settings.fsrSharpness.coerceIn(0, 100),
+                    value = settings.fsrSharpness.coerceIn(0, 800),
                     min = 0,
-                    max = 100,
+                    max = 800,
                     valueFormatter = { "$it%" },
                     onChange = { pct -> viewModel.updateSettings { it.copy(fsrSharpness = pct) } },
                 )
