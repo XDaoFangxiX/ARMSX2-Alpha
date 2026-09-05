@@ -94,6 +94,21 @@ object CustomDriver {
             "https://api.github.com/repos/WearyConcern1165/ExynosTools/releases",
             "exynostools",
         ),
+        DriverSource(
+            "WinNative-Emu · Drivers",
+            "https://api.github.com/repos/WinNative-Emu/Drivers/releases",
+            "",
+        ),
+        DriverSource(
+            "The412Banner · Banners-Turnip",
+            "https://api.github.com/repos/The412Banner/Banners-Turnip/releases",
+            "bannersturnip",
+        ),
+        DriverSource(
+            "nihui · mesa-turnip-android-driver",
+            "https://api.github.com/repos/nihui/mesa-turnip-android-driver/releases",
+            "",
+        ),
     )
 
     /** Sane default for the driver's library soname when meta.json
