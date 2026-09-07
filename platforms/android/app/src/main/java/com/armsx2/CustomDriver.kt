@@ -94,6 +94,36 @@ object CustomDriver {
             "https://api.github.com/repos/WearyConcern1165/ExynosTools/releases",
             "exynostools",
         ),
+        DriverSource(
+            "WinNative · Turnip-Drivers",
+            "https://api.github.com/repos/WinNative-Emu/Drivers/releases",
+            "",
+        ),
+        DriverSource(
+            "The412Banner · Banners-Turnip",
+            "https://api.github.com/repos/The412Banner/Banners-Turnip/releases",
+            "bannersturnip",
+        ),
+        DriverSource(
+            "nihui · mesa-turnip-android-driver",
+            "https://api.github.com/repos/nihui/mesa-turnip-android-driver/releases",
+            "",
+        ),
+        DriverSource(
+            "DiskDVD · TurniptoolsA8XX",
+            "https://api.github.com/repos/DiskDVD/TurniptoolsA8XX/releases",
+            "",
+        ),
+        DriverSource(
+            "rickamaral94 · Amaral-Adreno-Tools",
+            "https://api.github.com/repos/rickamaral94/Amaral-Adreno-Tools/releases",
+            "AmaralAdrenoTools",
+        ),
+        DriverSource(
+            "JustCallMeJade · Drivers_Android_Mesa",
+            "https://api.github.com/repos/JustCallMeJade/Drivers_Android_Mesa/releases",
+            "DriversAndroidMesa",
+        ),
     )
 
     /** Sane default for the driver's library soname when meta.json
