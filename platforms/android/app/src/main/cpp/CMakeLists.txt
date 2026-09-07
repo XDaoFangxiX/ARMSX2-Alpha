@@ -39,6 +39,17 @@ set(ARMSX2_USE_ADRENOTOOLS ON CACHE BOOL "" FORCE)
 # 3rdparty/oboe, and this is the only build that has it.
 set(ARMSX2_USE_OBOE ON CACHE BOOL "" FORCE)
 
+# This build vendors shaderc (3rdparty/shaderc) and links the `shaderc` target;
+# pcsx2/CMakeLists.txt leaves Shaderc::shaderc_shared alone when it sees this.
+#
+# Belt-and-braces, not load-bearing: this build's SearchForStuff only calls
+# find_package(Shaderc) in its "upstream desktop, not used by ARMSX2" branch, so
+# Shaderc::shaderc_shared is never created here and the TARGET test over there
+# already excludes us. It earns its keep the day this build's shaderc sourcing
+# changes - which is the day the two copies could otherwise both be linked, and
+# a duplicate-symbol pile is a poor way to find that out.
+set(ARMSX2_USE_BUNDLED_SHADERC ON CACHE BOOL "" FORCE)
+
 # The core's common/ and pcsx2/ CMakeLists guard on this sentinel (it is normally
 # set by the desktop top-level CMakeLists.txt, which the Android build bypasses).
 set(TOP_CMAKE_WAS_SOURCED TRUE)
@@ -214,6 +225,11 @@ target_link_libraries(savers log GLESv2 m)
 
 
 add_subdirectory(3rdparty/adrenotools)
+
+# pcsx2-gsrunner as an on-demand NDK executable for adb-shell replay runs on Android
+# devices. EXCLUDE_FROM_ALL keeps every APK build unchanged; build it explicitly with
+# --target pcsx2-gsrunner.
+add_subdirectory("${ARMSX2_ROOT}/pcsx2-gsrunner" "${CMAKE_BINARY_DIR}/pcsx2-gsrunner" EXCLUDE_FROM_ALL)
 
 # librashader: RetroArch (.slangp) shader chains for the GS post-process path, for BOTH
 # the Vulkan and OpenGL(ES) renderers. Rust-built and fetched at configure time from a

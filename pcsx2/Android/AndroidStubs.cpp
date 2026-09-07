@@ -5,23 +5,52 @@
 
 #include "PrecompiledHeader.h"
 
-#include "Input/InputManager.h"
 #include "CDVD/CDVDdiscReader.h"
 
-// The two below stand in for pcsx2-qt, so they are wanted only by the APK.
-// pcsx2-libretro/Main.cpp defines both itself, and the libretro core is
-// linked from these same sources - hence the guard, or the Android core
-// build ends on two duplicate symbols. Everything further down is frontend
-// independent and is compiled either way.
-#ifndef ENABLE_LIBRETRO
+#include "common/FileSystem.h"
+#include "common/HostSys.h"
 
-// g_host_hotkeys - normally defined in pcsx2-qt
-BEGIN_HOTKEY_LIST(g_host_hotkeys)
-END_HOTKEY_LIST()
+// g_host_hotkeys / Host::SetMouseLock moved to AndroidHostStubs.cpp: they are
+// FRONTEND definitions (emucore's JNI frontend has none; pcsx2-gsrunner has its
+// own), and keeping them in this member made every Android frontend that links
+// libpcsx2.a collide with them when this object was pulled for the disc stubs.
 
-// Host::SetMouseLock - no mouse lock on Android
-void Host::SetMouseLock(bool state)
+#ifdef ENABLE_LIBRETRO
+
+// The APK's JNI layer (platforms/android/.../native-lib.cpp) implements these,
+// and the libretro core is linked without it, so the Android core build ended
+// on undefined symbols. Each bridges to something the app owns and the core
+// does not have: the Storage Access Framework file it was handed, the app's own
+// directories, the notification sound. The core reaches its files through the
+// frontend's VFS instead, and the frontend owns audio.
+//
+// Nothing here can be reached with a frontend VFS installed - FileSystem tries
+// that first in every one of these paths - and without one, each returned
+// failure lands in the ordinary errno path rather than a hard stop.
+//
+// onPadRumble WAS stubbed here too. It is gone: InputManager now takes the
+// libretro core down its own rumble path (Host::SetPadVibration, wired to the
+// frontend's retro_rumble_interface) instead of the JNI one, so nothing
+// declares it in this build and a stub would only be a symbol nobody names.
+
+int FileSystem::OpenFDFileContent(const char* filename)
 {
+	return -1;
+}
+
+bool FileSystem::CreateDirectoryViaJava(const char* path)
+{
+	return false;
+}
+
+bool FileSystem::CreateFileViaJava(const char* path)
+{
+	return false;
+}
+
+bool Common::PlaySoundAsync(const char* path)
+{
+	return false;
 }
 
 #endif
