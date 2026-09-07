@@ -109,6 +109,21 @@ object CustomDriver {
             "https://api.github.com/repos/nihui/mesa-turnip-android-driver/releases",
             "",
         ),
+        DriverSource(
+            "DiskDVD · TurniptoolsA8XX",
+            "https://api.github.com/repos/DiskDVD/TurniptoolsA8XX/releases",
+            "",
+        ),
+        DriverSource(
+            "rickamaral94 · Amaral-Adreno-Tools",
+            "https://api.github.com/repos/rickamaral94/Amaral-Adreno-Tools/releases",
+            "AmaralAdrenoTools",
+        ),
+        DriverSource(
+            "JustCallMeJade · Drivers_Android_Mesa",
+            "https://api.github.com/repos/JustCallMeJade/Drivers_Android_Mesa/releases",
+            "DriversAndroidMesa",
+        ),
     )
 
     /** Sane default for the driver's library soname when meta.json
