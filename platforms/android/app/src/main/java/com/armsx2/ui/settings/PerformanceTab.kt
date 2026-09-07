@@ -87,7 +87,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
             // from the shared Settings.lowEndPreset so it matches the setup wizard.
             // Recommanded For Weak / Low-End Device
             val ultraLowEnd = Settings.ultraLowEndPreset(
-                s.copy(eeCycleRate = -6, eeCycleSkip = 1, mtvu = true, vu1Instant = true,
+                s.copy(eeCycleRate = -6, eeCycleSkip = 1, nominalSpeedPercent = 155, fpsLimit = 120, mtvu = true, vu1Instant = true,
                     vuFlagHack = true, intcStat = true, waitLoop = true, fastCDVD = true, gamefixInstantDma = true, gamefixBlitInternalFps = true, upscaleFloat = 0.5f, accurateBlendingUnit = 1),
                 mtvu = com.armsx2.DeviceTier.mtvuDefault(),
             )
@@ -301,7 +301,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
             IntSliderRow(
                 label = str("perf.speedLimit.label"),
                 value = s.nominalSpeedPercent.coerceIn(10, 1000),
-                min = 10,
+                min = 5,
                 max = 1000,
                 description = str("perf.speedLimit.description"),
                 valueFormatter = { "$it%" },
