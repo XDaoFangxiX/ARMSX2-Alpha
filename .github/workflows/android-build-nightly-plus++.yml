@@ -72,8 +72,8 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           # Make the script executable and run it, passing the install prefix
-          chmod +x ${{ github.workspace }}/build-dependencies.sh
-          ${{ github.workspace }}/build-dependencies.sh ${{ github.workspace }}/deps-prefix
+          chmod +x ${{ github.workspace }}/.github/workflows/scripts/android/build-dependencies.sh
+          ${{ github.workspace }}/.github/workflows/scripts/android/build-dependencies.sh ${{ github.workspace }}/deps-prefix
         env:
           ANDROID_NDK: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
           ANDROID_ABI: arm64-v8a   # matches the ABI used in the APK build
