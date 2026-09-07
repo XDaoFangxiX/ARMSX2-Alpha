@@ -734,7 +734,7 @@ fun AppTab() {
                 label = str("app.libraryMusic.volume"),
                 value = com.armsx2.LibraryMusic.volumePercent.value,
                 min = 0,
-                max = 100,
+                max = 150,
                 valueFormatter = { "$it%" },
                 onChange = { com.armsx2.LibraryMusic.setVolume(it) },
             )
@@ -790,7 +790,7 @@ fun AppTab() {
                 label = str("app.pauseMusic.volume"),
                 value = com.armsx2.PauseMusic.volumePercent.value,
                 min = 0,
-                max = 100,
+                max = 150,
                 valueFormatter = { "$it%" },
                 onChange = { com.armsx2.PauseMusic.setVolume(it) },
             )
@@ -844,7 +844,7 @@ fun AppTab() {
                 label = str("app.menuSfx.volume"),
                 value = com.armsx2.MenuSfx.volumePercent.value,
                 min = 0,
-                max = 100,
+                max = 150,
                 valueFormatter = { "$it%" },
                 onChange = { com.armsx2.MenuSfx.setVolume(it) },
             )
@@ -955,8 +955,8 @@ fun AppTab() {
 
         IntSliderRow(
             label = str("app.library.coverSize"),
-            value = (com.armsx2.ui.UiScale.coverScale.value * 100f).toInt().coerceIn(75, 250),
-            min = 75,
+            value = (com.armsx2.ui.UiScale.coverScale.value * 100f).toInt().coerceIn(30, 250),
+            min = 30,
             max = 250,
             valueFormatter = { "$it%" },
             onChange = { com.armsx2.ui.UiScale.setCoverScale(it / 100f) },

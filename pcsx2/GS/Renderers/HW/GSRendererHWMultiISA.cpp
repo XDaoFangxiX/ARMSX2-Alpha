@@ -581,8 +581,25 @@ bool GSSwPrimRenderFunctions::Run(GSRenderer& hw, GSSwPrimRenderState& sw, const
 		}
 	}
 
-	if (!sw.rasterizer)
-		sw.rasterizer = std::make_unique<GSSingleRasterizer>();
+	if (!hw.m_sw_rasterizer)
+		hw.m_sw_rasterizer = std::make_unique<GSSingleRasterizer>();
+
+	static_cast<GSSingleRasterizer*>(hw.m_sw_rasterizer.get())->Draw(data);
+
+	if (invalidate_tc)
+	{
+		GSOffset frame_offs = context->offset.fb;
+
+		if (GSLocalMemory::m_psm[context->FRAME.PSM].trbpp == 32 && context->FRAME.FBMSK)
+		{
+			if (context->FRAME.FBMSK == 0xFF000000)
+				frame_offs = GSRendererHW::GetInstance()->m_mem.GetOffset(context->FRAME.Block(), context->FRAME.FBW, PSMCT24);
+			else if (context->FRAME.FBMSK == 0x00FFFFFF)
+				frame_offs = GSRendererHW::GetInstance()->m_mem.GetOffset(context->FRAME.Block(), context->FRAME.FBW, PSMT8H);
+		}
+
+		g_texture_cache->InvalidateVideoMem(frame_offs, bbox);
+	}
 
 	static_cast<GSSingleRasterizer*>(sw.rasterizer.get())->Draw(data);
 

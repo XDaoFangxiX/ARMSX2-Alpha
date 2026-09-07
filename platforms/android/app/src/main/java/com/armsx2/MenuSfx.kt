@@ -61,7 +61,7 @@ object MenuSfx {
     /** Name of an imported custom pack folder, or null when using the bundled defaults. */
     val packName = mutableStateOf<String?>(null)
 
-    private fun gain(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+    private fun gain(): Float = (volumePercent.value.coerceIn(0, 150)) / 150f
 
     private var pool: SoundPool? = null
     /** event -> loaded SoundPool sample id. */
@@ -100,7 +100,7 @@ object MenuSfx {
     }
 
     fun setVolume(percent: Int) {
-        val p = percent.coerceIn(0, 100)
+        val p = percent.coerceIn(0, 150)
         volumePercent.value = p
         MainActivityRuntime.prefs.edit { putInt(VolumeKey, p) }
     }

@@ -41,7 +41,7 @@ object LibraryMusic {
     /** 0..100, backs the App-settings slider. Applied live to the running player. */
     val volumePercent = mutableStateOf(DefaultVolumePercent)
 
-    private fun gain(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+    private fun gain(): Float = (volumePercent.value.coerceIn(0, 150)) / 150f
 
     /** Display name of the user's own track, or null when playing the bundled default.
      *  The app never ships or redistributes user tracks — this only plays a file the user
@@ -104,10 +104,10 @@ object LibraryMusic {
 
     /** Set the music volume (0..100) and apply it live to a playing track. */
     fun setVolume(percent: Int) {
-        val p = percent.coerceIn(0, 100)
+        val p = percent.coerceIn(0, 150)
         volumePercent.value = p
         MainActivityRuntime.prefs.edit { putInt(VolumeKey, p) }
-        val g = p / 100f
+        val g = p / 150f
         runCatching { player?.setVolume(g, g) }
     }
 

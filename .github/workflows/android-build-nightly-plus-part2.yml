@@ -1,0 +1,360 @@
+name: Android Build (Plus 7z)
+
+on:
+  workflow_dispatch:
+    inputs:
+      versionName:
+        description: 'Version name (e.g., v2.0.0)'
+        required: true
+        type: string
+        default: 'nightly'
+      build_type:
+        description: "Build type"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - debug
+          - release
+      flavor:
+        description: 'Build flavor (Github or Play)'
+        required: false
+        type: choice
+        options:
+          - Github
+          - Play
+        default: 'Github'
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: Android APK (Dual Core)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: platforms/android
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK + CMake
+        run: yes | sdkmanager "ndk;29.0.14206865" "cmake;3.31.6" >/dev/null || true
+
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+
+      - name: Fetch shaderc third-party deps
+        run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
+
+      - name: Set versionName in build.gradle.kts
+        run: |
+          sed -i 's/versionName = ".*"/versionName = "${{ github.event.inputs.versionName }}"/' app/build.gradle.kts
+
+      - name: Set up Discord SDK (placeholder)
+        run: |
+          echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # ---- Write helper scripts ----
+      - name: Create build-release-apk.sh
+        run: |
+          cat > "${{ github.workspace }}/build-release-apk.sh" << 'EOF'
+          #!/usr/bin/env bash
+          # Builds a single universal (dual‑core) APK with PGO, signs it, and copies it to $1.
+          # Environment variables used:
+          #   VC, VN, GRADLE_EXTRA_ARGS (optional), PGO_ARGS (optional), OUT (target file)
+          set -euo pipefail
+
+          ROOT_DIR="${{ github.workspace }}/platforms/android"
+          cd "$ROOT_DIR"
+
+          # Parse version from gradle (overridden by VN)
+          VN="${VN:-$(grep 'versionName' app/build.gradle.kts | sed -n 's/.*?:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)}"
+          VN="${VN:-nightly}"
+          VC="${VC:-${{ github.run_number }}}"
+
+          # Gradle extra args (minSdk, ndkVersion, march, etc.)
+          GRADLE_EXTRA_ARGS="${GRADLE_EXTRA_ARGS:-}"
+
+          # PGO profile – optional, set PGO_MODE=none to disable
+          PROF="$ROOT_DIR/app/build/pgo.prof"
+          PGO_MODE="${PGO_MODE:-optimize}"   # optimize|none
+          if [[ "$PGO_MODE" == "optimize" && -f "$PROF" ]]; then
+            PGO_ARGS=(-Parmsx2.pgo=optimize -Parmsx2.pgoProfile="$PROF")
+            echo "PGO: optimize using $PROF"
+          else
+            PGO_ARGS=(-Parmsx2.pgo=none)
+            echo "PGO: disabled"
+          fi
+
+          # Determine flavor (Github/Play) from input; default to Github
+          FLAVOR="${{ github.event.inputs.flavor }}"
+          FLAVOR_LOWER="$(echo "${FLAVOR}" | tr '[:upper:]' '[:lower:]')"
+          FLAVOR_CAP="$(echo ${FLAVOR:0:1} | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          BUILD_TYPE_LOWER="$(echo "${BUILD_TYPE}" | tr '[:upper:]' '[:lower:]')"
+          BUILD_TYPE_CAP="$(echo ${BUILD_TYPE:0:1} | tr '[:lower:]' '[:upper:]')${BUILD_TYPE:1}"
+
+          # find zipalign
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name zipalign -type f | sort -V | tail -1)
+          if [ -z "$ZIPALIGN" ]; then
+            echo "zipalign not found" >&2
+            exit 1
+          fi
+
+          # Directories
+          WORK="$ROOT_DIR/app/build/nightly-dualcore"
+          mkdir -p "$WORK/lib-stage/lib/arm64-v8a"
+          BUILT="$ROOT_DIR/app/build/outputs/apk/${FLAVOR_LOWER}/release/app-${FLAVOR_LOWER}-release.apk"
+
+          fsizef() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1"; }
+
+          # Build one core (4k or 16k)
+          build_core() {
+            local ps="$1" ln="$2"
+            echo "=== building core $ln (page=$ps) ==="
+            rm -f "$BUILT"
+            "$ROOT_DIR/gradlew" -p "$ROOT_DIR" ":app:assemble${FLAVOR_CAP}${BUILD_TYPE_CAP}" \
+              -Parmsx2.hostPageSize="$ps" \
+              -Parmsx2.nativeLibName="$ln" \
+              "${PGO_ARGS[@]}" \
+              -Parmsx2.versionCode="$VC" \
+              -Parmsx2.versionName="$VN" \
+              $GRADLE_EXTRA_ARGS \
+              --stacktrace
+            [[ -f "$BUILT" ]] || { echo "FATAL: gradle produced no APK for $ln" >&2; exit 1; }
+            unzip -l "$BUILT" "lib/arm64-v8a/lib${ln}.so" >/dev/null \
+              || { echo "FATAL: lib${ln}.so missing" >&2; exit 1; }
+            cp -f "$BUILT" "$WORK/base-${ln}.apk"
+            unzip -p "$BUILT" "lib/arm64-v8a/lib${ln}.so" > "$WORK/lib-stage/lib/arm64-v8a/lib${ln}.so"
+          }
+
+          build_core 0x1000 emucore_4k
+          build_core 0x4000 emucore_16k
+
+          # Merge into one universal APK (4k base, remove old libs, add both STORED)
+          UNS="$WORK/universal-unsigned.apk"
+          ALN="$WORK/universal-aligned.apk"
+          cp -f "$WORK/base-emucore_4k.apk" "$UNS"
+          zip -qd "$UNS" "META-INF/*" >/dev/null 2>&1 || true
+          zip -qd "$UNS" "lib/arm64-v8a/libemucore_4k.so" "lib/arm64-v8a/libemucore_16k.so" >/dev/null 2>&1 || true
+          ( cd "$WORK/lib-stage" && zip -qr -0 "$UNS" lib )
+          "$ZIPALIGN" -f -P 16 4 "$UNS" "$ALN"
+
+          # Sign (only for release builds)
+          if [[ "$BUILD_TYPE_LOWER" == "release" ]]; then
+            KEYSTORE_PATH="${HOME}/.android/release.keystore"
+            KEY_ALIAS="${KEY_ALIAS:-armsx2-ci}"
+            KS_PASSWORD="${KEYSTORE_PASSWORD:-armsx2-ci-temp}"
+            KEY_PASSWORD="${KEY_PASSWORD:-armsx2-ci-temp}"
+            mkdir -p "${HOME}/.android"
+            if [ ! -f "$KEYSTORE_PATH" ]; then
+              keytool -genkeypair -v -keystore "$KEYSTORE_PATH" -storetype PKCS12 \
+                -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+                -storepass "$KS_PASSWORD" -keypass "$KEY_PASSWORD" \
+                -dname "CN=ARMSX2 CI, OU=CI, O=CI, L=CI, S=CI, C=US" 2>/dev/null
+            fi
+            BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -n 1)
+            "${BUILD_TOOLS_DIR}/apksigner" sign --ks "$KEYSTORE_PATH" \
+              --ks-pass "pass:${KS_PASSWORD}" --key-pass "pass:${KEY_PASSWORD}" \
+              --ks-key-alias "$KEY_ALIAS" "$ALN"
+            "${BUILD_TOOLS_DIR}/apksigner" verify --verbose "$ALN"
+          fi
+
+          # Copy to the requested output path
+          OUT="${1:-$ALN}"
+          cp -f "$ALN" "$OUT"
+          echo "Built: $OUT"
+          EOF
+          chmod +x "${{ github.workspace }}/build-release-apk.sh"
+
+      - name: Create build-release-targets.sh
+        run: |
+          cat > "${{ github.workspace }}/build-release-targets.sh" << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="${{ github.workspace }}"
+          VC="${VC:-${{ github.run_number }}}"
+          VN="${VN:-${{ github.event.inputs.versionName }}}"
+          WHICH="${1:-all}"
+          OUTDIR="${OUTDIR:-$HOME/Downloads}"
+
+          LEGACY_MINSDK=26; LEGACY_NDK="29.0.14206865"; LEGACY_MARCH="armv8-a"
+          LEGACY_MARCH_EXTRA="-moutline-atomics"
+          A11_MINSDK=30;    A11_NDK="29.0.14206865";    A11_MARCH="armv8.2-a+fp16+dotprod"
+          A13_MINSDK=33;    A13_NDK="29.0.14206865";    A13_MARCH="armv8.2-a+fp16+dotprod"
+          A15_MINSDK=35;    A15_NDK="29.0.14206865";    A15_MARCH="armv8.2-a+fp16+dotprod"
+
+          LEGACY_OUT="ARMSX2-${VN}-legacy-armv8.0-sdk26.apk"
+          A11_OUT="ARMSX2-${VN}-a11-armv8.2-sdk30.apk"
+          A13_OUT="ARMSX2-${VN}-a13-armv8.2-sdk33.apk"
+          A15_OUT="ARMSX2-${VN}-a15-armv8.2-sdk35.apk"
+
+          build_one() {
+            local label="$1" minsdk="$2" ndk="$3" march="$4" extra="$5" out="$6"
+            echo "############ target: $label ############"
+            GRADLE_EXTRA_ARGS="-Parmsx2.minSdk=$minsdk -Parmsx2.ndkVersion=$ndk -Parmsx2.march=$march${extra:+ -Parmsx2.marchExtra=$extra}" \
+              VC="$VC" VN="$VN" "$HERE/build-release-apk.sh" "$out"
+          }
+
+          case "$WHICH" in
+            all|legacy|a11|a13|a15) : ;;
+            *) echo "usage: $0 [all|legacy|a11|a13|a15]" >&2; exit 1 ;;
+          esac
+
+          if [[ "$WHICH" == "legacy" || "$WHICH" == "all" ]]; then
+            build_one legacy "$LEGACY_MINSDK" "$LEGACY_NDK" "$LEGACY_MARCH" "$LEGACY_MARCH_EXTRA" "$OUTDIR/$LEGACY_OUT"
+          fi
+          if [[ "$WHICH" == "a11" || "$WHICH" == "all" ]]; then
+            build_one a11 "$A11_MINSDK" "$A11_NDK" "$A11_MARCH" "" "$OUTDIR/$A11_OUT"
+          fi
+          if [[ "$WHICH" == "a13" || "$WHICH" == "all" ]]; then
+            build_one a13 "$A13_MINSDK" "$A13_NDK" "$A13_MARCH" "" "$OUTDIR/$A13_OUT"
+          fi
+          if [[ "$WHICH" == "a15" || "$WHICH" == "all" ]]; then
+            build_one a15 "$A15_MINSDK" "$A15_NDK" "$A15_MARCH" "" "$OUTDIR/$A15_OUT"
+          fi
+
+          # Release shape validation
+          if [[ "$WHICH" == "all" ]]; then
+            echo "================= RELEASE SHAPE ================="
+            for f in "$LEGACY_OUT" "$A11_OUT" "$A13_OUT" "$A15_OUT"; do
+              [[ -f "$OUTDIR/$f" ]] || { echo "FATAL artifact missing: $OUTDIR/$f" >&2; exit 1; }
+            done
+            for pair in "$LEGACY_OUT:sdk26" "$A11_OUT:sdk30" "$A13_OUT:sdk33" "$A15_OUT:sdk35"; do
+              name="${pair%:*}"; want="${pair##*:}"
+              got="$(grep -o 'sdk[0-9][0-9]' <<<"$name" | sort -u | tr '\n' ' ')"
+              [[ "$got" == "$want " ]] || {
+                echo "FATAL $name carries sdk markers '$got', expected exactly '$want'" >&2; exit 1; }
+            done
+            echo "  all four present, markers correct — safe to publish"
+            echo "  UPLOAD ORDER: $LEGACY_OUT FIRST."
+          fi
+          EOF
+          chmod +x "${{ github.workspace }}/build-release-targets.sh"
+
+      # ---- Build all four APKs ----
+      - name: Build release APKs (all targets)
+        id: build
+        run: |
+          mkdir -p "$HOME/Downloads"
+          VC="${{ github.run_number }}" \
+          VN="${{ github.event.inputs.versionName }}" \
+          "${{ github.workspace }}/build-release-targets.sh" all
+        env:
+          PGO_MODE: optimize   # or none if you don't have a profile
+          # Pass through any other env needed (e.g., DISCORD_SDK_DIR)
+
+      # ---- Compress all APKs into a .7z archive ----
+      - name: Install 7zip
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Compress APKs to .7z (ultra)
+        run: |
+          OUTDIR="$HOME/Downloads"
+          VN="${{ github.event.inputs.versionName }}"
+          ARCHIVE="ARMSX2-${VN}-all-targets.7z"
+          cd "$OUTDIR"
+          7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -ms=on -mmt=on "$ARCHIVE" *.apk
+          echo "ARCHIVE_PATH=$OUTDIR/$ARCHIVE" >> $GITHUB_ENV
+
+      # ---- GitHub release handling ----
+      - name: Set up GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Get previous release
+        id: get_release
+        run: |
+          previous_release=$(gh release list --limit 1 --json tagName -q '.[].tagName')
+          echo "previous_release=$previous_release" >> $GITHUB_ENV
+
+      - name: Delete previous release
+        if: env.previous_release != ''
+        run: |
+          gh release delete ${{ env.previous_release }} --yes
+
+      - name: Check if previous tag exists
+        id: check_tag
+        run: |
+          if [ ! -z "${{ env.previous_release }}" ] && git rev-parse ${{ env.previous_release }} >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_ENV
+          else
+            echo "tag_exists=false" >> $GITHUB_ENV
+          fi
+
+      - name: Delete previous tag
+        if: env.tag_exists == 'true'
+        run: |
+          git tag -d ${{ env.previous_release }}
+          git push --delete origin ${{ env.previous_release }}
+
+      - name: Get short SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Create Git Tag
+        id: create_tag
+        run: |
+          VERSION_NAME="${{ github.event.inputs.versionName }}"
+          TAG="${VERSION_NAME}-build.${{ github.run_number }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Nightly build ${{ github.run_number }}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
+          name: Nightly ${{ steps.create_tag.outputs.tag }}
+          body: |
+            ## ARMSX2 Android Nightly Build (Dual Core, Tiered APKs)
+            This release contains four APKs targeting different Android versions and CPU capabilities.
+
+            **Important:** The `legacy` APK is uploaded **first** to ensure older updaters (pre‑2.6.6.6) receive a compatible build.
+
+            - Build number: ${{ github.run_number }}
+            - Commit: ${{ github.sha }}
+            - Short SHA: ${{ env.short_sha }}
+            - Flavor: ${{ github.event.inputs.flavor }}
+            - Build type: ${{ github.event.inputs.build_type }}
+
+            **APK files:**
+            - `ARMSX2-*-legacy-armv8.0-sdk26.apk`  – Android 8+ (ARMv8.0 + outline atomics)
+            - `ARMSX2-*-a11-armv8.2-sdk30.apk`     – Android 11+ (ARMv8.2 + FP16 + DotProd)
+            - `ARMSX2-*-a13-armv8.2-sdk33.apk`     – Android 13+ (same codegen)
+            - `ARMSX2-*-a15-armv8.2-sdk35.apk`     – Android 15+ (same codegen)
+
+            Also included: `ARMSX2-*-all-targets.7z` (all APKs, ultra‑compressed).
+          files: |
+            ${{ env.ARCHIVE_PATH }}
+            ~/Downloads/ARMSX2-*-legacy-armv8.0-sdk26.apk
+            ~/Downloads/ARMSX2-*-a11-armv8.2-sdk30.apk
+            ~/Downloads/ARMSX2-*-a13-armv8.2-sdk33.apk
+            ~/Downloads/ARMSX2-*-a15-armv8.2-sdk35.apk
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
