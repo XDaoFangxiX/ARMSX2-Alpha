@@ -64,27 +64,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/deps-prefix
-          key: ${{ runner.os }}-android-deps-${{ hashFiles('build-dependencies.sh') }}-${{ hashFiles('**/CMakeLists.txt') }} # poor man's change detection
+          key: ${{ runner.os }}-android-deps-${{ hashFiles('build-dependencies.sh') }}-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-deps-
 
       - name: Build dependencies
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
-          # Make the script executable and run it, passing the install prefix
           chmod +x ${{ github.workspace }}/.github/workflows/scripts/android/build-dependencies.sh
           ${{ github.workspace }}/.github/workflows/scripts/android/build-dependencies.sh ${{ github.workspace }}/deps-prefix
         env:
           ANDROID_NDK: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
-          ANDROID_ABI: arm64-v8a   # matches the ABI used in the APK build
-          ANDROID_API: 26          # minSdk for the legacy build
-        # This step will clone and build all dependencies from source.
-        # On cache miss, it runs; on hit, it skips, reusing the built libraries.
+          ANDROID_ABI: arm64-v8a
+          ANDROID_API: 26
 
       # ----------------------------------------------------------------------
       # Fetch shaderc third-party deps (if still needed by the core)
-      # Note: The dependency script already builds shaderc, but the core's
-      #       own shaderc submodule might still be used; we keep this step.
       # ----------------------------------------------------------------------
       - name: Fetch shaderc third-party deps
         run: python3 app/src/main/cpp/3rdparty/shaderc/utils/git-sync-deps
@@ -97,8 +92,6 @@ jobs:
       - name: Set up Discord SDK
         run: |
           echo "DISCORD_SDK_DIR=${{ github.workspace }}/discord-sdk" >> $GITHUB_ENV
-          # Optionally download if not present
-          # wget -q -O discord-sdk.zip https://dl-game-sdk.discordapp.net/latest/discord_game_sdk.zip && unzip -q discord-sdk.zip -d ${{ github.workspace }}/discord-sdk
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -112,7 +105,6 @@ jobs:
           GRADLE="$ROOT_DIR/gradlew"
           cd "$ROOT_DIR"
 
-          # Fixed parameters for the legacy target (safe for all ARMv8.0 devices)
           MINSDK=26
           NDK_VER="29.0.14206865"
           MARCH="armv8-a"
@@ -121,7 +113,6 @@ jobs:
           VN="${{ github.event.inputs.versionName }}"
           VC="${{ github.run_number }}"
 
-          # PGO profile path
           PROF="$ROOT_DIR/pgo/armsx2.profdata"
 
           if [[ -f "$PROF" ]]; then
@@ -134,7 +125,6 @@ jobs:
           fi
           echo "pgo_enabled=${PGO_ENABLED}" >> $GITHUB_OUTPUT
 
-          # Build tools
           BUILD_TOOLS_DIR="$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -1)"
           ZIPALIGN="${BUILD_TOOLS_DIR}/zipalign"
           echo "Using build-tools: $BUILD_TOOLS_DIR"
@@ -206,7 +196,6 @@ jobs:
           echo "flavor=$FLAVOR_INPUT" >> $GITHUB_OUTPUT
         env:
           DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
-          # Ensure the CMake prefix path is also available as environment variable
           CMAKE_PREFIX_PATH: ${{ github.workspace }}/deps-prefix
 
       # ===== Sign the APK (only for release builds) =====
@@ -263,20 +252,33 @@ jobs:
       - name: Authenticate GitHub CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      - name: Delete previous nightly release and tag (if any)
+      # ---- NEW deletion logic (English) ----
+      - name: Get previous release
+        id: get_release
         run: |
-          set -e
-          VN="${{ steps.build.outputs.versionName }}"
-          TAG_PATTERN="${VN}-build.*"
-          EXISTING_TAG=$(gh release list --json tagName -q ".[] | select(.tagName | test(\"${TAG_PATTERN}\")) | .tagName" | head -1)
-          if [ -n "$EXISTING_TAG" ]; then
-            echo "Deleting existing release and tag: $EXISTING_TAG"
-            gh release delete "$EXISTING_TAG" --yes || true
-            git tag -d "$EXISTING_TAG" || true
-            git push --delete origin "$EXISTING_TAG" || true
+          previous_release=$(gh release list --limit 1 --json tagName -q '.[].tagName')
+          echo "previous_release=$previous_release" >> $GITHUB_ENV
+
+      - name: Delete previous release
+        if: env.previous_release != ''
+        run: |
+          gh release delete ${{ env.previous_release }} --yes
+
+      - name: Check if previous tag exists
+        id: check_tag
+        run: |
+          if [ ! -z "${{ env.previous_release }}" ] && git rev-parse ${{ env.previous_release }} >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_ENV
           else
-            echo "No previous nightly release found for version $VN"
+            echo "tag_exists=false" >> $GITHUB_ENV
           fi
+
+      - name: Delete previous tag
+        if: env.tag_exists == 'true'
+        run: |
+          git tag -d ${{ env.previous_release }}
+          git push --delete origin ${{ env.previous_release }}
+      # ---- end new deletion logic ----
 
       - name: Create Git Tag
         id: create_tag
