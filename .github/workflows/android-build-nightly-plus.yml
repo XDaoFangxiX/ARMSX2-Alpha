@@ -50,6 +50,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       # Install NDK 29 and CMake (fail if installation fails – removed '|| true')
       - name: Install NDK + CMake
