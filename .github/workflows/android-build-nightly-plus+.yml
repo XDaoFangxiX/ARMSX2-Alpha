@@ -49,12 +49,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: 'cmdline-tools'
 
       - name: Accept Android SDK Licenses
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          yes | sdkmanager --update >/dev/null 2>&1 || true
-
+    
       - name: Install NDK + CMake
         run: yes | sdkmanager "ndk;29.0.14206865" "cmake;3.31.6" >/dev/null
 
