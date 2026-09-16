@@ -49,8 +49,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: 'cmdline-tools'
 
       - name: Accept Android SDK Licenses
         run: |
