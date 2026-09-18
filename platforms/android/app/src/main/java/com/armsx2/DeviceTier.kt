@@ -52,9 +52,16 @@ object DeviceTier {
         false
     }
 
+    /**
+     * Android does not expose a public isUltraLowRamDevice() API in the standard SDK.
+     * Fall back to the public low-RAM flag combined with a strict memory threshold so
+     * we still catch the weakest devices without relying on hidden APIs.
+     */
     private fun isUltraLowRam(context: Context): Boolean = try {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        am?.isUltraLowRamDevice ?: false
+        val lowRam = am?.isLowRamDevice ?: false
+        val ultraLowMem = totalMemBytes(context) < 2_200_000_000L
+        lowRam && ultraLowMem
     } catch (_: Throwable) {
         false
     }
@@ -83,7 +90,7 @@ object DeviceTier {
 
     /**
      * Heuristic: a device is "ultra-low-end" for PS2 emulation when ANY of:
-     *   - the OS flags it as a ultra-Low-RAM device (isUltraLowRamDevice), OR
+     *   - the OS flags it as a low-RAM device and it is memory-constrained, OR
      *   - it has fewer than 6 CPU cores (no headroom for MTVU + GS thread), OR
      *   - it has under ~3 GB total RAM.
      *
