@@ -8,6 +8,11 @@ on:
         required: true
         type: string
         default: 'nightly'
+      applicationId:
+        description: 'Application ID (e.g., com.armsx2)'
+        required: false
+        type: string
+        default: 'com.armsx2'
       build_type:
         description: "Build type"
         required: true
@@ -40,7 +45,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
-
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -99,8 +103,8 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # ===== Build the legacy APK (dual‑core + PGO) =====
-      - name: Build Legacy APK (dual‑core, PGO)
+      # ===== Build the legacy APK (dual-core + PGO) =====
+      - name: Build Legacy APK (dual-core, PGO)
         id: build
         run: |
           set -e
@@ -115,6 +119,8 @@ jobs:
 
           VN="${{ github.event.inputs.versionName }}"
           VC="${{ github.run_number }}"
+          APP_ID="${{ github.event.inputs.applicationId }}"
+          [ -z "$APP_ID" ] && APP_ID="com.armsx2"
 
           PROF="$ROOT_DIR/pgo/armsx2.profdata"
 
@@ -150,6 +156,7 @@ jobs:
           build_core() {
             local ps="$1" ln="$2"
             echo "=== Building core: $ln (page size $ps) for flavor $FLAVOR_INPUT ==="
+            echo "=== Application ID: $APP_ID ==="
 
             "$GRADLE" -p "$ROOT_DIR" ":app:assemble${FLAVOR_CAP}Release" \
               -Parmsx2.hostPageSize="$ps" \
@@ -158,6 +165,7 @@ jobs:
               -Parmsx2.ndkVersion="$NDK_VER" \
               -Parmsx2.march="$MARCH" \
               -Parmsx2.marchExtra="$MARCH_EXTRA" \
+              -Parmsx2.applicationId="$APP_ID" \
               "${PGO_ARGS[@]}" \
               -Parmsx2.versionCode="$VC" \
               -Parmsx2.versionName="$VN" \
@@ -196,6 +204,7 @@ jobs:
           echo "FINAL_APK=$FINAL_APK" >> $GITHUB_OUTPUT
           echo "OUTDIR=$OUTDIR" >> $GITHUB_OUTPUT
           echo "versionName=$VN" >> $GITHUB_OUTPUT
+          echo "applicationId=$APP_ID" >> $GITHUB_OUTPUT
           echo "flavor=$FLAVOR_INPUT" >> $GITHUB_OUTPUT
         env:
           DISCORD_SDK_DIR: ${{ env.DISCORD_SDK_DIR }}
@@ -211,7 +220,7 @@ jobs:
           KS_PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}"
           KEY_PASSWORD="${{ secrets.KEY_PASSWORD }}"
           if [ -z "$KS_PASSWORD" ]; then
-            echo "WARNING: No keystore password secret set – using temporary insecure password." >&2
+            echo "WARNING: No keystore password secret set - using temporary insecure password." >&2
             KS_PASSWORD="armsx2-ci-temp"
             KEY_PASSWORD="armsx2-ci-temp"
           fi
@@ -273,9 +282,10 @@ jobs:
           tag_name: ${{ steps.create_tag.outputs.tag }}
           name: Nightly ${{ steps.create_tag.outputs.tag }}
           body: |
-            ## ARMSX2 Android Nightly Build (Legacy – Dual Core)
-            **This APK is the legacy build** (ARMv8.0 + outline atomics, minSdk 26) and includes both 4K and 16K page‑size cores.
+            ## ARMSX2 Android Nightly Build (Legacy - Dual Core)
+            **This APK is the legacy build** (ARMv8.0 + outline atomics, minSdk 26) and includes both 4K and 16K page-size cores.
             - Version: ${{ steps.build.outputs.versionName }}
+            - Application ID: ${{ steps.build.outputs.applicationId }}
             - Build number: ${{ github.run_number }}
             - Commit: ${{ github.sha }}
             - Short SHA: ${{ github.sha }}
