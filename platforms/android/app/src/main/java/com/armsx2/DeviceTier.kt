@@ -28,8 +28,9 @@ object DeviceTier {
      *  than it saves (EE<->VU1 sync + thread hop), so we gate the *default* on a
      *  6-core minimum. This does NOT change the persisted Settings default (which
      *  would bleed into existing users' saved configs) — it's applied only in
-     *  first-run wizard defaults and the Low-End preset. */
+     *  first-run wizard defaults and the Low-End / Ultra-Low-End preset. */
     fun mtvuDefault(): Boolean = coreCount() >= 6
+    fun mtvuUltraLowEnd(): Boolean = coreCount() >= 4
 
     /** Total physical RAM in bytes, or Long.MAX_VALUE if it can't be read (so a
      *  bad read never trips the low-RAM branch). */
@@ -47,6 +48,13 @@ object DeviceTier {
     private fun isLowRam(context: Context): Boolean = try {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         am?.isLowRamDevice ?: false
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun isUltraLowRam(context: Context): Boolean = try {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        am?.isUltraLowRamDevice ?: false
     } catch (_: Throwable) {
         false
     }
@@ -69,6 +77,28 @@ object DeviceTier {
         // on a nominal 4 GB device), so genuine 4 GB devices aren't flagged.
         val lowMem = totalMemBytes(context) < 3_600_000_000L
         lowRam || fewCores || lowMem
+    } catch (_: Throwable) {
+        false
+    }
+
+    /**
+     * Heuristic: a device is "ultra-low-end" for PS2 emulation when ANY of:
+     *   - the OS flags it as a ultra-Low-RAM device (isUltraLowRamDevice), OR
+     *   - it has fewer than 6 CPU cores (no headroom for MTVU + GS thread), OR
+     *   - it has under ~3 GB total RAM.
+     *
+     * Deliberately OR-ed and lenient: on any probe failure the individual
+     * checks default to "not ultra-low-end", so we only flag a device we're fairly
+     * sure is weak. Callers use this to *recommend* (never force) the Ultra-Low-End
+     * preset / Fast profile in the setup wizard.
+     */
+    fun isUltraLowEnd(context: Context): Boolean = try {
+        val ultraLowRam = isUltraLowRam(context)
+        val fewCores = coreCount() < 4
+        // ~3 GB with a little slack for reserved/kernel memory (report ~3.7 GB
+        // on a nominal 3 GB device), so genuine 3 GB devices aren't flagged.
+        val ultraLowMem = totalMemBytes(context) < 2_200_000_000L
+        ultraLowRam || fewCores || ultraLowMem
     } catch (_: Throwable) {
         false
     }
