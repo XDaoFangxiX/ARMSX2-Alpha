@@ -89,7 +89,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
             val ultraLowEnd = Settings.ultraLowEndPreset(
                 s.copy(eeCycleRate = -6, eeCycleSkip = 1, nominalSpeedPercent = 155, fpsLimit = 120, mtvu = true, vu1Instant = true,
                     vuFlagHack = true, intcStat = true, waitLoop = true, fastCDVD = true, gamefixInstantDma = true, gamefixBlitInternalFps = true, upscaleFloat = 0.5f, accurateBlendingUnit = 1),
-                mtvu = com.armsx2.DeviceTier.mtvuDefault(),
+                mtvu = com.armsx2.DeviceTier.mtvuUltraLowEnd(),
             )
             // -1 = no preset matches (custom): no segment highlighted.
             val idx = when (s) { safe -> 0; fast -> 1; lowEnd -> 2; ultraLowEnd -> 3; else -> -6 }
