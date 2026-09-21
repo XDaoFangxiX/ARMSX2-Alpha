@@ -278,17 +278,18 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" -m "Nightly build ${{ github.run_number }}"
+          git tag -a "${TAG}" -m "Alpha build ${{ github.run_number }}"
           git push origin "${TAG}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.create_tag.outputs.tag }}
-          name: Nightly ${{ steps.create_tag.outputs.tag }}
+          name: Alpha ${{ steps.create_tag.outputs.tag }}
           body: |
-            ## ARMSX2 Android Nightly Build (Legacy - Dual Core)
+            ## ARMSX2 Android Alpha Build (Legacy - Dual Core)
             **This APK is the legacy build** (ARMv8.0 + outline atomics, minSdk 26) and includes both 4K and 16K page-size cores.
+            **Only Testing & We have never collaborated with anyone.
             - Version: ${{ steps.build.outputs.versionName }}
             - Application ID: ${{ steps.build.outputs.applicationId }}
             - Build number: ${{ github.run_number }}
@@ -301,7 +302,7 @@ jobs:
           files: |
             ${{ steps.build.outputs.OUTDIR }}/${{ steps.build.outputs.FINAL_APK }}
           draft: false
-          prerelease: true
+          prerelease: false
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
