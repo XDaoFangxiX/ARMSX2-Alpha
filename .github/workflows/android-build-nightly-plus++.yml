@@ -7,12 +7,12 @@ on:
         description: 'Version name (e.g., v2.0.0)'
         required: true
         type: string
-        default: 'nightly'
+        default: ''
       applicationId:
         description: 'Application ID (e.g., com.armsx2)'
         required: false
-        type: string
-        default: 'com.armsx2'
+        default: "com.armsx2"
+        type: choice
         options:
           - com.armsx2
           - com.armsx2.custom
