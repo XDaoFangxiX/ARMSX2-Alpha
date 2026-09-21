@@ -289,7 +289,7 @@ jobs:
           body: |
             ## ARMSX2 Android Alpha Build (Legacy - Dual Core)
             **This APK is the legacy build** (ARMv8.0 + outline atomics, minSdk 26) and includes both 4K and 16K page-size cores.
-            **Only Testing & We have never collaborated with anyone.
+            **Only Testing & We have never collaborated with anyone.**
             - Version: ${{ steps.build.outputs.versionName }}
             - Application ID: ${{ steps.build.outputs.applicationId }}
             - Build number: ${{ github.run_number }}
