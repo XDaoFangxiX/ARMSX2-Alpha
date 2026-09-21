@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: 'com.armsx2'
+        options:
+          - com.armsx2
+          - com.armsx2.custom
+          - com.armsx2.turnip
+          - com.antutu.ABenchMark
       build_type:
         description: "Build type"
         required: true
