@@ -2248,20 +2248,31 @@ data class Settings(
          *  NOTE: intentionally does NOT touch CAS — there is no CAS Settings
          *  field wired in this build. 
          * Recommanded For Weak / Low End Device. */
-        fun ultraLowEndPreset(base: Settings, mtvu: Boolean): Settings = base.copy(
-            accurateBlendingUnit = 1,   // Basic
-            upscaleFloat = 0.5f,        // 0.5x resolution
-            hwMipmap = false,           // mipmap off
-            gpuPaletteConversion = false,
-            texturePreloading = 1,      // Partial
-            hwRov = false,              // ROV off
-            gamefixInstantDma = true,
-            gamefixBlitInternalFps = true,
-            eeCycleRate = -6,
-            eeCycleSkip = 1,
-            mtvu = mtvu,
-        )
-
+       fun ultraLowEndPreset(base: Settings, mtvu: Boolean): Settings = base.copy(
+            cpu = base.cpu.copy(
+                eeCycleRate = -6,
+                eeCycleSkip = 1,
+                mtvu = mtvu,
+            ),
+            display = base.display.copy(
+                hwRov = false,              // ROV off
+            ),
+            hwFixes = base.hwFixes.copy(
+                gpuPaletteConversion = false,
+            ),
+            emuCore = base.emuCore.copy(
+                gamefixInstantDma = true,
+                gamefixBlitInternalFps = true, 
+            ),
+            output = base.output.copy(
+                upscaleFloat = 0.5f,        // 0.5x resolution
+            ),
+            graphics = base.graphics.copy(
+                accurateBlendingUnit = 0,   // Minimum
+                hwMipmap = false,           // mipmap off
+                texturePreloading = 1,      // Partial
+            ),
+        ) 
         /** Lenient parse — missing keys fall back to defaults so old saved
          *  blobs survive when new fields are added. */
         fun fromJson(json: JSONObject): Settings {
