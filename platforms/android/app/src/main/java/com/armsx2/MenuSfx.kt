@@ -100,7 +100,7 @@ object MenuSfx {
     }
 
     fun setVolume(percent: Int) {
-        val p = percent.coerceIn(0, 100)
+        val p = percent.coerceIn(0, 150)
         volumePercent.value = p
         MainActivityRuntime.prefs.edit { putInt(VolumeKey, p) }
     }

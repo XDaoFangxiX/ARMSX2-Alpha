@@ -124,13 +124,21 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 ),
                 mtvu = com.armsx2.DeviceTier.mtvuDefault(),
             )
+            // Ultra-Low-End = every cheap GPU/CPU lever, MTVU gated on core count. Built
+            // from the shared Settings.lowEndPreset so it matches the setup wizard.
+            // Recommanded For Weak / Low-End Device
+            val ultraLowEnd = Settings.ultraLowEndPreset(
+                s.copy(eeCycleRate = -6, eeCycleSkip = 1, nominalSpeedPercent = 155, fpsLimit = 120, mtvu = true, vu1Instant = true,
+                    vuFlagHack = true, intcStat = true, waitLoop = true, fastCDVD = true, gamefixInstantDma = true, gamefixBlitInternalFps = true, upscaleFloat = 0.5f, accurateBlendingUnit = 1),
+                mtvu = com.armsx2.DeviceTier.mtvuUltraLowEnd(),
+            )
             // -1 = no preset matches (custom): no segment highlighted.
-            val idx = when (s) { safe -> 0; fast -> 1; lowEnd -> 2; else -> -1 }
+            val idx = when (s) { safe -> 0; fast -> 1; lowEnd -> 2; ultraLowEnd -> 3; else -> -6 }
             SegmentedRow(
                 label = str("perf.speedhackProfile.label"),
-                options = listOf(str("perf.speedhackProfile.optimal"), str("perf.speedhackProfile.fast"), str("perf.speedhackProfile.lowEnd")),
+                options = listOf(str("perf.speedhackProfile.optimal"), str("perf.speedhackProfile.fast"), str("perf.speedhackProfile.lowEnd"), str("perf.speedhackProfile.ultraLowEnd")),
                 selectedIndex = idx,
-                onChange = { when (it) { 0 -> apply(safe); 1 -> apply(fast); 2 -> apply(lowEnd) } },
+                onChange = { when (it) { 0 -> apply(safe); 1 -> apply(fast); 2 -> apply(lowEnd); 3 -> apply(ultraLowEnd) } },
             )
         }
         HelpText(str("perf.speedhackProfile.help"))
@@ -253,11 +261,14 @@ fun PerformanceTab(state: MutableState<Settings>) {
             IntSliderRow(
                 label = str("perf.eeCycleRate.label"),
                 value = s.cpu.eeCycleRate,
-                min = -3,
-                max = 3,
+                min = -6,
+                max = 6,
                 description = str("perf.eeCycleRate.description"),
                 valueFormatter = { rate ->
                     when (rate) {
+                        -6 -> "5%"
+                        -5 -> "15%"
+                        -4 -> "30%"
                         -3 -> "50%"
                         -2 -> "60%"
                         -1 -> "75%"
@@ -265,6 +276,9 @@ fun PerformanceTab(state: MutableState<Settings>) {
                         1 -> "130%"
                         2 -> "180%"
                         3 -> "300%"
+                        4 -> "400%"
+                        5 -> "450%"
+                        6 -> "500%"
                         else -> "$rate"
                     }
                 },
@@ -335,8 +349,8 @@ fun PerformanceTab(state: MutableState<Settings>) {
             // Arbitrary value; default stays 100. Affects audio pitch / timing / RA.
             IntSliderRow(
                 label = str("perf.speedLimit.label"),
-                value = s.frameLimit.nominalSpeedPercent.coerceIn(10, 1000),
-                min = 10,
+                value = s.frameLimit.nominalSpeedPercent.coerceIn(5, 1000),
+                min = 5,
                 max = 1000,
                 description = str("perf.speedLimit.description"),
                 valueFormatter = { "$it%" },
@@ -348,9 +362,9 @@ fun PerformanceTab(state: MutableState<Settings>) {
             // emulation runs full speed (no slowdown). Arbitrary value; 0 = off.
             IntSliderRow(
                 label = str("perf.displayFpsCap.label"),
-                value = s.frameLimit.fpsLimit.coerceIn(0, 60),
+                value = s.frameLimit.fpsLimit.coerceIn(0, 120),
                 min = 0,
-                max = 60,
+                max = 120,
                 description = str("perf.displayFpsCap.description"),
                 valueFormatter = { if (it == 0) com.armsx2.i18n.I18n.get("common.off") else "$it fps" },
                 onChange = { apply(s.copy(frameLimit = s.frameLimit.copy(fpsLimit = it))) },
@@ -361,9 +375,9 @@ fun PerformanceTab(state: MutableState<Settings>) {
             // Speed Limit % is relative to this; this is the rate, not a display cap.
             IntSliderRow(
                 label = str("perf.ntscFramerate.label"),
-                value = s.output.framerateNtsc.roundToInt().coerceIn(20, 75),
-                min = 20,
-                max = 75,
+                value = s.output.framerateNtsc.roundToInt().coerceIn(5, 120),
+                min = 5,
+                max = 120,
                 description = str("perf.ntscFramerate.description"),
                 // The true PS2 NTSC rate is 59.94 Hz, which rounds to the "60" stop.
                 // Label that stop honestly and snap it to the exact default, so the
@@ -374,9 +388,9 @@ fun PerformanceTab(state: MutableState<Settings>) {
             SettingsDivider()
             IntSliderRow(
                 label = str("perf.palFramerate.label"),
-                value = s.output.frameratePal.roundToInt().coerceIn(20, 75),
-                min = 20,
-                max = 75,
+                value = s.output.frameratePal.roundToInt().coerceIn(5, 120),
+                min = 5,
+                max = 120,
                 description = str("perf.palFramerate.description"),
                 valueFormatter = { "$it Hz" },
                 onChange = { apply(s.copy(output = s.output.copy(frameratePal = it.toFloat()))) },
