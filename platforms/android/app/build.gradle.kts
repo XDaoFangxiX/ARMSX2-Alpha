@@ -40,6 +40,14 @@ val armsx2MarchExtra = providers.gradleProperty("armsx2.marchExtra").orElse("")
 // interpreter bisect into the EE recompiler. Never set for a shipped build.
 val armsx2RecTestHooks = providers.gradleProperty("armsx2.recTestHooks").orElse("false")
 val armsx2ApplicationId = providers.gradleProperty("armsx2.applicationId").orElse("com.armsx2")
+// Distribution channel, baked into BuildConfig so the app knows which release stream it belongs to
+// without guessing from the version string. "nightly" builds ship a distinct applicationId and
+// label (see ci-nightly-dualcore.sh) so they install alongside the stable app instead of replacing
+// it; the updater reads CHANNEL to decide whether to follow nightly or stable releases.
+val armsx2Channel = providers.gradleProperty("armsx2.channel").orElse("stable")
+// Home-screen label. The nightly overrides this with @string/app_name_nightly so the two installs
+// are distinguishable; everything else keeps the localized default.
+val armsx2AppLabel = providers.gradleProperty("armsx2.appLabel").orElse("@string/app_name")
 val armsx2SigningPropertiesFile = rootProject.file("armsx2_keystore.properties")
 val armsx2SigningProperties = Properties().apply {
     if (armsx2SigningPropertiesFile.isFile) {
@@ -98,10 +106,14 @@ android {
 
     defaultConfig {
         applicationId = armsx2ApplicationId.get()
+        manifestPlaceholders["appLabel"] = armsx2AppLabel.get()
         minSdk = armsx2MinSdk.get().toInt()
         targetSdk = 37
         versionCode = providers.gradleProperty("armsx2.versionCode").orNull?.toInt() ?: 1088
         versionName = providers.gradleProperty("armsx2.versionName").orNull ?: "2.6.1"
+        // Which release stream this APK came from: "stable" or "nightly". Read by the in-app
+        // updater instead of inferring it from versionCode magnitude.
+        buildConfigField("String", "CHANNEL", "\"${armsx2Channel.get()}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
@@ -122,6 +134,14 @@ android {
     sourceSets {
         getByName("main") {
             if (armsx2DiscordSdkDir != null) jniLibs.srcDir(armsx2DiscordSdkDir)
+        }
+    }
+
+    testOptions {
+        unitTests {
+            // Let android.util.Log and friends no-op in JVM unit tests instead of throwing; the
+            // catalog tests exercise warning paths (schema rejection) that log.
+            isReturnDefaultValues = true
         }
     }
 
@@ -270,7 +290,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = "3.31.6"
         }
     }
     buildFeatures {
@@ -413,6 +433,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
 
     testImplementation(libs.junit)
+    // Real org.json for JVM unit tests: the mockable android.jar stubs throw "not mocked", and
+    // this artifact wins the classpath ordering, so catalog parsing tests exercise real behavior.
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     debugImplementation(libs.androidx.compose.ui.tooling)

@@ -100,20 +100,20 @@ object InGameOverlay {
         // Game scope from one they never touched, so setting a per-game value that happens
         // to equal global still pins it instead of vanishing.
         ConfigStore.save(settingsScope.value, currentSerial.value, updated, previous)
-        frameLimitOn.value = updated.frameLimitEnable
+        frameLimitOn.value = updated.frameLimit.frameLimitEnable
 
         if (MainActivityRuntime.nativeReady.value) {
             runCatching {
-                if (previous.frameLimitEnable != updated.frameLimitEnable) {
-                    NativeApp.setSetting("EmuCore/GS", "FrameLimitEnable", "bool", updated.frameLimitEnable.toString())
-                    NativeApp.speedhackLimitermode(if (updated.frameLimitEnable) 0 else 3)
+                if (previous.frameLimit.frameLimitEnable != updated.frameLimit.frameLimitEnable) {
+                    NativeApp.setSetting("EmuCore/GS", "FrameLimitEnable", "bool", updated.frameLimit.frameLimitEnable.toString())
+                    NativeApp.speedhackLimitermode(if (updated.frameLimit.frameLimitEnable) 0 else 3)
                     MainActivityRuntime.fastForwardToggleActive = false
                 }
-                if (previous.upscaleFloat != updated.upscaleFloat &&
+                if (previous.output.upscaleFloat != updated.output.upscaleFloat &&
                     MainActivityRuntime.eState.value != EmuState.STOPPED
                 ) {
-                    NativeApp.renderUpscalemultiplier(updated.upscaleFloat.coerceIn(0.25f, 8.0f))
-                    MainActivityRuntime.upscale.value = updated.upscaleFloat.coerceIn(0.25f, 8.0f)
+                    NativeApp.renderUpscalemultiplier(updated.output.upscaleFloat.coerceIn(0.25f, 8.0f))
+                    MainActivityRuntime.upscale.value = updated.output.upscaleFloat.coerceIn(0.25f, 8.0f)
                 }
                 if (MainActivityRuntime.eState.value != EmuState.STOPPED) {
                     // Regenerate the native per-game INI (gamesettings/<serial>_<CRC>.ini) from the
@@ -133,7 +133,12 @@ object InGameOverlay {
                     // were affected. ConfigStore.save() above has already stored the new values, so
                     // resolveForGame() here reads them and nothing depends on applyTo() running first.
                     currentSerial.value?.takeIf { it.isNotBlank() }?.let { serial ->
-                        ConfigStore.resolveForGame(serial).writeGameSettingsIni(ConfigStore.loadGlobal())
+                        ConfigStore.resolveForGame(serial).writeGameSettingsIni(ConfigStore.loadGlobal(), claimsFor = serial)
+                        // The core read that file into its game layer at boot and keeps answering
+                        // from memory, so without a re-read this commit would still apply what the
+                        // file said then: old values, and old answers about which GameDB fixes the
+                        // player has taken back for this game.
+                        NativeApp.reloadGameSettingsLayer()
                     }
                     updated.applyTo()
                 }
@@ -180,7 +185,7 @@ object InGameOverlay {
         currentSerial.value = serial
         settingsScope.value = if (serial == null) SettingsScope.Global else SettingsScope.Game
         settingsState.value = ConfigStore.resolveForGame(serial)
-        frameLimitOn.value = settingsState.value.frameLimitEnable
+        frameLimitOn.value = settingsState.value.frameLimit.frameLimitEnable
         hardcoreOn.value = runCatching { NativeApp.isHardcoreMode() }.getOrDefault(false)
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) MainActivityRuntime.pauseForOverlay()
         com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.MENU_OPEN)
@@ -234,11 +239,11 @@ object InGameOverlay {
     private fun applyOsdFlags(s: com.armsx2.config.Settings) {
         osdMode.value = OsdMode.Custom
         NativeApp.osdApplyFlags(
-            s.osdShowFps, s.osdShowVps, s.osdShowSpeed, s.osdShowCpu, s.osdShowGpu,
-            s.osdShowResolution, s.osdShowGsStats, s.osdShowFrameTimes, s.osdShowHardwareInfo,
-            s.osdShowVersion, s.osdShowSettings, s.osdShowInputs,
+            s.osd.osdShowFps, s.osd.osdShowVps, s.osd.osdShowSpeed, s.osd.osdShowCpu, s.osd.osdShowGpu,
+            s.osd.osdShowResolution, s.osd.osdShowGsStats, s.osd.osdShowFrameTimes, s.osd.osdShowHardwareInfo,
+            s.osd.osdShowVersion, s.osd.osdShowSettings, s.osd.osdShowInputs,
         )
-        NativeApp.osdShowGpuStats(s.osdShowGpuStats)
+        NativeApp.osdShowGpuStats(s.osd.osdShowGpuStats)
     }
 
     fun editTouchLayout() {

@@ -714,15 +714,16 @@ const char* Pcsx2Config::GSOptions::GetRendererName(GSRendererType type)
 	switch (type)
 	{
 			// clang-format off
-		case GSRendererType::Auto:  return "Auto";
-		case GSRendererType::DX11:  return "Direct3D 11";
-		case GSRendererType::DX12:  return "Direct3D 12";
-		case GSRendererType::Metal: return "Metal";
-		case GSRendererType::OGL:   return "OpenGL";
-		case GSRendererType::VK:    return "Vulkan";
-		case GSRendererType::SW:    return "Software";
-		case GSRendererType::Null:  return "Null";
-		default:                    return "";
+		case GSRendererType::Auto:   return "Auto";
+		case GSRendererType::DX11:   return "Direct3D 11";
+		case GSRendererType::DX12:   return "Direct3D 12";
+		case GSRendererType::Metal:  return "Metal";
+		case GSRendererType::OGL:    return "OpenGL";
+		case GSRendererType::VK:     return "Vulkan";
+		case GSRendererType::SW:     return "Software";
+		case GSRendererType::Null:   return "Null";
+		case GSRendererType::NullHW: return "Null (HW)";
+		default:                     return "";
 			// clang-format on
 	}
 }
@@ -862,6 +863,7 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(UpscaleMultiplier) &&
 
 		OpEqu(AccurateBlendingUnit) &&
+		OpEqu(CopyRoadMaximumBlendingLevel) &&
 		OpEqu(TextureFiltering) &&
 		OpEqu(TexturePreloading) &&
 		OpEqu(GSDumpCompression) &&
@@ -893,6 +895,7 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(UserHacks_TextureInsideRt) &&
 		OpEqu(UserHacks_Limit24BitDepth) &&
 		OpEqu(UserHacks_BilinearHack) &&
+		OpEqu(FieldShift) &&
 		OpEqu(OverrideTextureBarriers) &&
 		OpEqu(DepthFeedbackMode) &&
 		OpEqu(BackThreadMode) &&
@@ -1117,6 +1120,7 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 
 	SettingsWrapIntEnumEx(LinearPresent, "linear_present_mode");
 	SettingsWrapIntEnumEx(InterlaceMode, "deinterlace_mode");
+	SettingsWrapBitfieldEx(FieldShift, "field_shift");
 
 	SettingsWrapEntry(OsdScale);
 	SettingsWrapEntry(OsdColor);
@@ -2101,6 +2105,7 @@ void Pcsx2Config::AchievementsOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(LBOverlays);
 	SettingsWrapEntry(NotificationsDuration);
 	SettingsWrapEntry(LeaderboardsDuration);
+	SettingsWrapEntry(NotificationScale);
 	SettingsWrapIntEnumEx(OverlayPosition, "OverlayPosition");
 	SettingsWrapIntEnumEx(NotificationPosition, "NotificationPosition");
 	SettingsWrapEntry(InfoSoundName);
@@ -2112,13 +2117,14 @@ void Pcsx2Config::AchievementsOptions::LoadSave(SettingsWrapper& wrap)
 		//Clamp in case setting was updated manually using the INI
 		NotificationsDuration = std::clamp(NotificationsDuration, MINIMUM_NOTIFICATION_DURATION, MAXIMUM_NOTIFICATION_DURATION);
 		LeaderboardsDuration = std::clamp(LeaderboardsDuration, MINIMUM_NOTIFICATION_DURATION, MAXIMUM_NOTIFICATION_DURATION);
+		NotificationScale = std::clamp(NotificationScale, MINIMUM_NOTIFICATION_SCALE, MAXIMUM_NOTIFICATION_SCALE);
 	}
 }
 
 bool Pcsx2Config::AchievementsOptions::operator==(const AchievementsOptions& right) const
 {
 	return OpEqu(bitset) && OpEqu(NotificationsDuration) && OpEqu(LeaderboardsDuration) &&
-		   OpEqu(OverlayPosition) && OpEqu(NotificationPosition);
+		   OpEqu(NotificationScale) && OpEqu(OverlayPosition) && OpEqu(NotificationPosition);
 }
 
 bool Pcsx2Config::AchievementsOptions::operator!=(const AchievementsOptions& right) const

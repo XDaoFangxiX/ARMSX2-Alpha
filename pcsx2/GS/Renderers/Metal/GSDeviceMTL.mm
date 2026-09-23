@@ -724,7 +724,7 @@ GSTexture* GSDeviceMTL::CreateSurface(GSTexture::Usage usage, int width, int hei
 	}
 }}
 
-void GSDeviceMTL::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, GSVector4* dRect, const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c, const Filter filter)
+void GSDeviceMTL::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, GSVector4* dRect, const MergeTopBand* top_band, const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c, const Filter filter)
 { @autoreleasepool {
 	id<MTLCommandBuffer> cmdbuf = GetRenderCmdBuf();
 	GSScopedDebugGroupMTL dbg(cmdbuf, @"DoMerge");
@@ -747,6 +747,8 @@ void GSDeviceMTL::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex,
 		// 2nd output is enabled and selected. Copy it to destination so we can blend it with 1st output
 		// Note: value outside of dRect must contains the background color (c)
 		StretchRect(sTex[1], sRect[1], dTex, dRect[1], ShaderConvert::COPY, filter);
+		if (top_band[1].enabled)
+			StretchRect(sTex[1], top_band[1].src, dTex, top_band[1].dst, ShaderConvert::COPY, filter);
 	}
 
 	// Save 2nd output
@@ -766,11 +768,21 @@ void GSDeviceMTL::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex,
 		{
 			// Blend with a constant alpha
 			DoStretchRect(sTex[0], sRect[0], dTex, dRect[0], pipeline, filter, LoadAction::Load, &cb_c, sizeof(cb_c));
+			if (top_band[0].enabled)
+			{
+				DoStretchRect(sTex[0], top_band[0].src, dTex, top_band[0].dst, pipeline, filter, LoadAction::Load,
+					&cb_c, sizeof(cb_c));
+			}
 		}
 		else
 		{
 			// Blend with 2 * input alpha
 			DoStretchRect(sTex[0], sRect[0], dTex, dRect[0], pipeline, filter, LoadAction::Load, nullptr, 0);
+			if (top_band[0].enabled)
+			{
+				DoStretchRect(sTex[0], top_band[0].src, dTex, top_band[0].dst, pipeline, filter, LoadAction::Load,
+					nullptr, 0);
+			}
 		}
 	}
 
@@ -810,12 +822,14 @@ void GSDeviceMTL::DoShadeBoost(GSTexture* sTex, GSTexture* dTex, const float par
 
 #ifdef ARMSX2_HAS_LIBRASHADER
 
-static void ReportShaderChainError(const char* what, libra_error_t err)
+static std::string ReportShaderChainError(const char* what, libra_error_t err)
 {
+	std::string message;
 	char* msg = nullptr;
 	if (libra_error_write(err, &msg) == 0 && msg)
 	{
 		Console.Error("(GS) librashader %s failed: %s", what, msg);
+		message = msg;
 		libra_error_free_string(&msg);
 	}
 	else
@@ -823,6 +837,7 @@ static void ReportShaderChainError(const char* what, libra_error_t err)
 		Console.Error("(GS) librashader %s failed (errno %d)", what, static_cast<int>(libra_error_errno(err)));
 	}
 	libra_error_free(&err);
+	return message;
 }
 
 #endif
@@ -872,12 +887,17 @@ bool GSDeviceMTL::DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex)
 #else
 	// Latch it, or a preset that fails to compile runs a full slang compile every frame
 	if (m_shader_chain_failed && m_shader_chain_preset == GSConfig.ShaderChainPreset)
-		return false;
+	{
+		if (m_shader_chain_retry == GetShaderChainRetry())
+			return false;
+		DestroyShaderChain();
+	}
 
 	if (!m_shader_chain || m_shader_chain_preset != GSConfig.ShaderChainPreset)
 	{
 		DestroyShaderChain();
 		m_shader_chain_preset = GSConfig.ShaderChainPreset;
+		m_shader_chain_retry = GetShaderChainRetry();
 
 		libra_shader_preset_t preset = nullptr;
 		if (libra_error_t err = libra_preset_create(m_shader_chain_preset.c_str(), &preset))
@@ -891,12 +911,13 @@ bool GSDeviceMTL::DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex)
 		libra_mtl_filter_chain_t chain = nullptr;
 		if (libra_error_t err = libra_mtl_filter_chain_create(&preset, m_queue, nullptr, &chain))
 		{
-			ReportShaderChainError("chain create", err);
+			SetShaderChainError(m_shader_chain_preset, ReportShaderChainError("chain create", err));
 			m_shader_chain_failed = true;
 			return false;
 		}
 
 		m_shader_chain = chain;
+		SetShaderChainError({}, {});
 		m_shader_frame_count = 0;
 		m_shader_param_generation = 0;
 		Console.WriteLn("(GS) librashader: loaded preset '%s'", m_shader_chain_preset.c_str());
@@ -916,20 +937,17 @@ bool GSDeviceMTL::DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex)
 	if (libra_error_t err = libra_mtl_filter_chain_frame(
 			&chain, GetRenderCmdBuf(), m_shader_frame_count, src, dst, &vp, nullptr, nullptr))
 	{
-		ReportShaderChainError("frame", err);
+		SetShaderChainError(m_shader_chain_preset, ReportShaderChainError("frame", err));
 		m_shader_chain_failed = true;
-		// A chain that failed partway has already encoded passes into this command buffer, and
-		// the ring it recycles per-frame objects over is shallower than our deferred-submit
-		// window. The success path flushes for exactly that reason; so must this one.
+		// A failed frame may already have encoded passes, so it flushes like the success path.
 		FlushEncoders();
 		return false;
 	}
 	m_shader_frame_count++;
 	dTex->SetState(GSTexture::State::Dirty);
 
-	// librashader recycles per-frame objects over a ring shallower than our deferred-submit
-	// window, so a frame is only safe once a submit follows it. This also clears the
-	// deferred-submit counters, so a chain frame always ends a batch
+	// librashader reuses per-frame objects over a ring shallower than the deferred-submit window,
+	// so every chain frame is submitted before the next. This also ends the current batch.
 	FlushEncoders();
 	return true;
 #endif
@@ -2430,6 +2448,7 @@ void GSDeviceMTL::MRESetHWPipelineState(GSHWDrawConfig::VSSelector vssel, GSHWDr
 		setFnConstantB(m_fn_constants, pssel.automatic_lod,         GSMTLConstantIndex_PS_AUTOMATIC_LOD);
 		setFnConstantB(m_fn_constants, pssel.manual_lod,            GSMTLConstantIndex_PS_MANUAL_LOD);
 		setFnConstantB(m_fn_constants, pssel.region_rect,           GSMTLConstantIndex_PS_REGION_RECT);
+		setFnConstantB(m_fn_constants, pssel.native_texel_grid,     GSMTLConstantIndex_PS_NATIVE_TEXEL_GRID);
 		setFnConstantI(m_fn_constants, pssel.scanmsk,               GSMTLConstantIndex_PS_SCANMSK);
 		setFnConstantI(m_fn_constants, pssel.aa1,                   GSMTLConstantIndex_PS_AA1);
 		setFnConstantB(m_fn_constants, pssel.abe,                   GSMTLConstantIndex_PS_ABE);
@@ -2676,6 +2695,13 @@ static_assert(offsetof(GSHWDrawConfig::PSConstantBuffer, TCOffsetHack)     == of
 static_assert(offsetof(GSHWDrawConfig::PSConstantBuffer, STScale)          == offsetof(GSMTLMainPSUniform, st_scale));
 static_assert(offsetof(GSHWDrawConfig::PSConstantBuffer, DitherMatrix)     == offsetof(GSMTLMainPSUniform, dither_matrix));
 static_assert(offsetof(GSHWDrawConfig::PSConstantBuffer, ScaleFactor)      == offsetof(GSMTLMainPSUniform, scale_factor));
+static_assert(offsetof(GSHWDrawConfig::PSConstantBuffer, DitherPhase)      == offsetof(GSMTLMainPSUniform, dither_phase));
+static_assert(offsetof(GSHWDrawConfig::PSConstantBuffer, NativeTexelGrid)  == offsetof(GSMTLMainPSUniform, native_texel_grid));
+
+// DoInterlace hands the shader the whole InterlaceConstantBuffer, so the two layouts have to agree.
+static_assert(sizeof(InterlaceConstantBuffer) == sizeof(GSMTLInterlacePSUniform));
+static_assert(offsetof(InterlaceConstantBuffer, ZrH)        == offsetof(GSMTLInterlacePSUniform, ZrH));
+static_assert(offsetof(InterlaceConstantBuffer, FieldPad)   == offsetof(GSMTLInterlacePSUniform, field_pad));
 
 void GSDeviceMTL::SetupDestinationAlpha(GSTexture* rt, GSTexture* ds, const GSVector4i& r, SetDATM datm)
 {
