@@ -124,6 +124,11 @@ object CustomDriver {
             "https://api.github.com/repos/JustCallMeJade/Drivers_Android_Mesa/releases",
             "DriversAndroidMesa",
         ),
+        DriverSource(
+            "BmdHacks · ARMSX2-Turnip",
+            "https://api.github.com/repos/bmdhacks/armsx2-turnip/releases",
+            "ARMSX2Turnip",
+        ),
     )
 
     /** Sane default for the driver's library soname when meta.json
