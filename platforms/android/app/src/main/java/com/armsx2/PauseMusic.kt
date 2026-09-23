@@ -76,7 +76,7 @@ object PauseMusic {
         if (!fg) pause()
     }
 
-    private fun gain(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+    private fun gain(): Float = (volumePercent.value.coerceIn(0, 150)) / 150f
 
     private fun cancelFade() {
         fadeJob?.cancel()
@@ -109,7 +109,7 @@ object PauseMusic {
     }
 
     fun setVolume(percent: Int) {
-        val p = percent.coerceIn(0, 100)
+        val p = percent.coerceIn(0, 150)
         volumePercent.value = p
         MainActivityRuntime.prefs.edit { putInt(VolumeKey, p) }
         // A manual change is an explicit request for this level — take over any in-progress fade so
