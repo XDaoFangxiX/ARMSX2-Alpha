@@ -80,7 +80,6 @@ protected:
 	bool GetScanlineGlobalData(SharedData* data);
 
 	bool IsCoverageAlphaSupported() override;
-	GSVertexKernels::CullGrid EngineCullGrid() const override { return GSVertexKernels::MakeCullGrid(4, 4); }
 	GSHWAutoFlushLevel GetAutoFlushLevel() const override;
 public:
 	GSRendererSW(int threads);

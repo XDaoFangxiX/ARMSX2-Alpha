@@ -714,16 +714,15 @@ const char* Pcsx2Config::GSOptions::GetRendererName(GSRendererType type)
 	switch (type)
 	{
 			// clang-format off
-		case GSRendererType::Auto:   return "Auto";
-		case GSRendererType::DX11:   return "Direct3D 11";
-		case GSRendererType::DX12:   return "Direct3D 12";
-		case GSRendererType::Metal:  return "Metal";
-		case GSRendererType::OGL:    return "OpenGL";
-		case GSRendererType::VK:     return "Vulkan";
-		case GSRendererType::SW:     return "Software";
-		case GSRendererType::Null:   return "Null";
-		case GSRendererType::NullHW: return "Null (HW)";
-		default:                     return "";
+		case GSRendererType::Auto:  return "Auto";
+		case GSRendererType::DX11:  return "Direct3D 11";
+		case GSRendererType::DX12:  return "Direct3D 12";
+		case GSRendererType::Metal: return "Metal";
+		case GSRendererType::OGL:   return "OpenGL";
+		case GSRendererType::VK:    return "Vulkan";
+		case GSRendererType::SW:    return "Software";
+		case GSRendererType::Null:  return "Null";
+		default:                    return "";
 			// clang-format on
 	}
 }
@@ -863,7 +862,6 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(UpscaleMultiplier) &&
 
 		OpEqu(AccurateBlendingUnit) &&
-		OpEqu(CopyRoadMaximumBlendingLevel) &&
 		OpEqu(TextureFiltering) &&
 		OpEqu(TexturePreloading) &&
 		OpEqu(GSDumpCompression) &&
@@ -895,7 +893,6 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(UserHacks_TextureInsideRt) &&
 		OpEqu(UserHacks_Limit24BitDepth) &&
 		OpEqu(UserHacks_BilinearHack) &&
-		OpEqu(FieldShift) &&
 		OpEqu(OverrideTextureBarriers) &&
 		OpEqu(DepthFeedbackMode) &&
 		OpEqu(BackThreadMode) &&
@@ -1120,7 +1117,6 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 
 	SettingsWrapIntEnumEx(LinearPresent, "linear_present_mode");
 	SettingsWrapIntEnumEx(InterlaceMode, "deinterlace_mode");
-	SettingsWrapBitfieldEx(FieldShift, "field_shift");
 
 	SettingsWrapEntry(OsdScale);
 	SettingsWrapEntry(OsdColor);
