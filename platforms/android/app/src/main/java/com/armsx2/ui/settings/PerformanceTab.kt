@@ -141,6 +141,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     ),
                     frameLimit = s.frameLimit.copy(
                         nominalSpeedPercent = 155, 
+                        fpsLimit = 120, 
                     ),
                     emuCore = s.emuCore.copy(
                         gamefixInstantDma = true, 
@@ -148,7 +149,6 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     ),
                     output = s.output.copy(
                         upscaleFloat = 0.5f, 
-                        fpsLimit = 120, 
                     ),
                     graphics = s.graphics.copy(
                         accurateBlendingUnit = 1
