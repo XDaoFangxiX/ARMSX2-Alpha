@@ -272,9 +272,13 @@ fun SettingsScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     CompositionLocalProvider(
-                        LocalSettingsSearchOpenSections provides pendingJump
-                            ?.takeIf { it.category == displayedCategory }?.sections?.toSet()
-                            ?: emptySet(),
+                        LocalSettingsSearchOpenSections provides (
+                            pendingJump
+                                ?.takeIf { it.category == displayedCategory }
+                                ?.sections
+                                ?.toSet()
+                                ?: emptySet()
+                        )
                     ) {
                         SettingsPanel(displayedCategory, viewModel, Modifier.fillMaxWidth())
                     }
