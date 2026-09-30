@@ -979,6 +979,23 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         selected = settings.output.aspectRatio,
         onSelect = viewModel::setAspectRatio,
     )
+    // Screen orientation from in-game: whether a game plays better in portrait or landscape is
+    // found out by trying it, and that meant leaving for All Settings each time. Same values as
+    // the Renderer tab's row, and applied straight away the same way.
+    HorizontalOptions(
+        title = str("renderer.orientation.label"),
+        options = listOf(
+            0 to str("renderer.orientation.device"),
+            1 to str("renderer.orientation.landscape"),
+            2 to str("renderer.orientation.portrait"),
+            3 to str("renderer.orientation.autoRotate"),
+        ),
+        selected = settings.output.orientation.coerceIn(0, 3),
+        onSelect = { value ->
+            viewModel.updateSettings { it.copy(output = it.output.copy(orientation = value)) }
+            MainActivityRuntime.instance?.applyEmulationOrientation()
+        },
+    )
     // Overlay artwork, switchable from in-game — trying bezels means seeing them ON the game, and
     // having to leave for All Settings each time made that unusable. Import still lives in the
     // settings tab (it opens a file picker); this is the picker for what is already imported.
@@ -1221,9 +1238,10 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
         multiplier = settings.graphics.lsfgMultiplier,
         dllPath = settings.graphics.lsfgDllPath,
         performance = settings.graphics.lsfgPerformance,
+        fp16 = settings.graphics.lsfgFp16,
         flowScale = settings.graphics.lsfgFlowScale,
         targetRate = settings.graphics.lsfgTargetRate,
-    ) { on, mult, dll, perf, flow, target ->
+    ) { on, mult, dll, perf, flow, target, half ->
         viewModel.updateSettings {
             it.copy(
                 graphics = it.graphics.copy(
@@ -1231,6 +1249,7 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
                     lsfgMultiplier = mult,
                     lsfgDllPath = dll,
                     lsfgPerformance = perf,
+                    lsfgFp16 = half,
                     lsfgFlowScale = flow,
                     lsfgTargetRate = target,
                 ),
@@ -1343,6 +1362,9 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
     // Sits with the touch layout because it's the same job: what the on-screen pad LOOKS
     // like, right after where it's laid out. Full-screen like Controller mapping.
     CompactAction(str("tab.skins"), "◈", Modifier.fillMaxWidth(), viewModel::openSkins)
+    Spacer(Modifier.height(6.dp))
+    // Hotkeys, under Skins: All Settings' Hotkeys page, opened straight over the game.
+    CompactAction(str("tab.hotkeys"), "⌘", Modifier.fillMaxWidth(), viewModel::openHotkeys)
     // Analog sticks in-game: swap/invert per stick, deadzone and feel. Requested because some
     // games ship no invert option of their own, so changing it meant leaving the game for All
     // Settings mid-session (Sizor). Global scope, matching the rumble/multitap toggles above.
