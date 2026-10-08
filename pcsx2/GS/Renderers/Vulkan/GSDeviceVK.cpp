@@ -40,12 +40,14 @@ namespace
 	constexpr u64 kLibretroRetireFrames = 6;
 } // namespace
 #include "GS/Renderers/Common/GSDevice.h"
+#include "GS/Renderers/Common/GSAlphaBitLogicOp.h"
 #include "GS/Renderers/Common/GSFastStencilShadow.h"
 #include "GS/Renderers/Common/GSDynamicFeedbackLoopPolicy.h"
 #include "GS/Renderers/Common/GSFramebufferFetchPolicy.h"
 #include "GS/Renderers/Common/GSMeasurementOverrides.h"
 #include "GS/Renderers/Common/GSSelfReadRoadPolicy.h"
 #include "GS/DriverReport/GSDriverReport.h"
+#include "GS/DriverReport/GSDriverReportActive.h"
 #include "GS/DriverReport/GSDriverReportClassify.h"
 #include "GS/DriverReport/GSDriverReportProfile.h"
 #include "GS/DriverReport/GSDriverReportVulkan.h"
@@ -629,6 +631,8 @@ bool GSDeviceVK::SelectDeviceFeatures()
 	m_device_features.geometryShader = available_features.geometryShader;
 	m_device_features.fragmentStoresAndAtomics = available_features.fragmentStoresAndAtomics;
 	m_device_features.pipelineStatisticsQuery = available_features.pipelineStatisticsQuery;
+	// Pipelines with logicOpEnable need the feature enabled at device creation (GSAlphaBitLogicOp.h).
+	m_device_features.logicOp = available_features.logicOp;
 
 	return true;
 }
@@ -1118,7 +1122,10 @@ bool GSDeviceVK::ProcessDeviceExtensions()
 
 	// query
 	vkGetPhysicalDeviceProperties2(m_physical_device, &properties2);
-	ResolveDeviceIdentity();
+	// The properties struct is chained only when the extension is enabled; without it the device has
+	// no push descriptors to count.
+	ResolveDeviceIdentity(
+		m_optional_extensions.vk_khr_push_descriptor ? push_descriptor_properties.maxPushDescriptors : 0);
 
 	// Mali r44p1 loses the device under an in-pass self-read. This alone does not avoid it: the
 	// driver-bug database also puts r44p1 on the render-target copy road.
@@ -1133,6 +1140,9 @@ bool GSDeviceVK::ProcessDeviceExtensions()
 		(attachment_feedback_loop_dynamic_feature.attachmentFeedbackLoopDynamicState == VK_TRUE) &&
 		m_optional_extensions.vk_ext_attachment_feedback_loop_layout;
 
+	// The rule resolver exempts malisx2 from the Mali avoid at the descriptor count checked below.
+	static_assert(NUM_TFX_TEXTURES == VULKAN_PUSH_DESCRIPTORS_REQUIRED);
+
 	// Decide whether to bind textures via VK_KHR_push_descriptor. It's optional
 	// now — when it's absent (some Mali, e.g. Mali-G52), unusable, or known-buggy
 	// we fall back to per-frame allocated descriptor sets so Vulkan still runs.
@@ -1143,8 +1153,9 @@ bool GSDeviceVK::ProcessDeviceExtensions()
 			push_descriptor_properties.maxPushDescriptors, NUM_TFX_TEXTURES);
 		m_use_push_descriptors = false;
 	}
-	// Mali crashes in vkCmdPushDescriptorSetKHR even where it advertises the extension, and an
-	// Adreno driver other than Qualcomm's or Turnip is untested with it.
+	// Arm's Mali blob crashes in vkCmdPushDescriptorSetKHR even where it advertises the extension, and
+	// an Adreno driver other than Qualcomm's or Turnip is untested with it. malisx2 is exempt from the
+	// Mali half in the rule (exempt_malisx2_push_descriptors).
 	if (m_use_push_descriptors && m_device_rules.avoid_push_descriptors)
 		m_use_push_descriptors = false;
 	if (!m_use_push_descriptors)
@@ -1153,6 +1164,10 @@ bool GSDeviceVK::ProcessDeviceExtensions()
 	// Qualcomm's Adreno driver selects the wrong provoking vertex, so GSRendererHW's software
 	// provoking-vertex-first path runs instead. Turnip keeps the extension.
 	if (m_optional_extensions.vk_ext_provoking_vertex && m_device_rules.broken_provoking_vertex)
+		m_optional_extensions.vk_ext_provoking_vertex = false;
+
+	// gsrunner -no-provoking-vertex: the same outcome on a device that has the extension.
+	if (m_optional_extensions.vk_ext_provoking_vertex && g_gs_measurement_overrides.no_provoking_vertex)
 		m_optional_extensions.vk_ext_provoking_vertex = false;
 
 	if (m_optional_extensions.vk_ext_line_rasterization && !line_rasterization_feature.bresenhamLines)
@@ -1224,10 +1239,11 @@ bool GSDeviceVK::ProcessDeviceExtensions()
 	return true;
 }
 
-void GSDeviceVK::ResolveDeviceIdentity()
+void GSDeviceVK::ResolveDeviceIdentity(u32 max_push_descriptors)
 {
 	// The driver context feeds the driver-bug database, ported from sashkinbro/EmuCoreX with his
-	// approval. Needs m_device_driver_properties, so it runs as soon as ProcessDeviceExtensions has them.
+	// approval. Needs m_device_driver_properties, so it runs as soon as ProcessDeviceExtensions has them,
+	// which is after that function has reconciled the ROAA feature bits the context reads below.
 	// Resolved on every platform: the driver-bug database is keyed on the driver, and Turnip on an
 	// ARM Linux handheld is the same driver as Turnip on a phone. Resolution is pure data;
 	// PublishGPUProfile hands it to the device, and the rules act only where they are queried.
@@ -1238,6 +1254,11 @@ void GSDeviceVK::ResolveDeviceIdentity()
 	driver_context.driver_version = m_device_properties.driverVersion;
 	driver_context.api_version = m_device_properties.apiVersion;
 	driver_context.max_draw_indirect_count = m_device_properties.limits.maxDrawIndirectCount;
+	// The extension, and its colour feature read back true before vkCreateDevice and again after it
+	// (CreateDevice's probe, ProcessDeviceExtensions' reconcile). Rows written for Arm's blob read
+	// this to decide whether to leave a malisx2 build alone.
+	driver_context.roaa_color_access = m_optional_extensions.vk_ext_rasterization_order_attachment_access;
+	driver_context.max_push_descriptors = max_push_descriptors;
 	if (m_optional_extensions.vk_khr_driver_properties)
 	{
 		driver_context.driver_id = static_cast<u32>(m_device_driver_properties.driverID);
@@ -3113,6 +3134,8 @@ void GSDeviceVK::Destroy()
 
 	std::unique_lock lock(s_instance_mutex);
 
+	GSDriverReport::ClearActiveVulkanDriver();
+
 	GSDevice::Destroy();
 
 	// Free the filter chain before the device goes away — it owns Vulkan objects created
@@ -3909,6 +3932,24 @@ void GSDeviceVK::PublishGPUProfile()
 		static_cast<unsigned>(mobile_profile.driver.matched_rule_count),
 		static_cast<unsigned long long>(mobile_profile.driver.bugs),
 		static_cast<unsigned long long>(mobile_profile.driver.workarounds));
+	Console.WriteLn("VK: GPU profile rules matched: %s",
+		GpuProfileDetector::DescribeMatchedRules(mobile_profile.driver).c_str());
+	Console.WriteLn("VK: GPU profile bugs: %s", GpuProfileDetector::DescribeBugs(mobile_profile.driver.bugs).c_str());
+	Console.WriteLn("VK: GPU profile workarounds: %s",
+		GpuProfileDetector::DescribeWorkarounds(mobile_profile.driver.workarounds).c_str());
+	Console.WriteLn("VK: device rules: %s", GpuProfileDetector::DescribeDeviceRules(m_device_rules).c_str());
+	if (IsDeviceMaliSX2())
+	{
+		Console.WriteLn("VK: driver is malisx2 (driverInfo \"%s\")", m_device_driver_properties.driverInfo);
+	}
+	else if (IsDeviceMali())
+	{
+		// The Android app tells a Mali user on this to get malisx2, for the GPUs it offers it for.
+		Console.WriteLn("VK: %s is a Mali GPU not running malisx2 (driverName \"%s\", driverInfo \"%s\")",
+			m_device_properties.deviceName, m_device_driver_properties.driverName,
+			m_device_driver_properties.driverInfo);
+	}
+	GSDriverReport::NoteActiveVulkanDriver(m_device_driver_properties.driverInfo);
 	DevCon.WriteLn("VK: GPU profile hints: %s", mobile_profile.hints.c_str());
 }
 
@@ -4090,6 +4131,7 @@ void GSDeviceVK::ResolveFeatureTable()
 #endif
 	m_features.provoking_vertex_last = m_optional_extensions.vk_ext_provoking_vertex;
 	m_features.vs_expand = !GSConfig.DisableVertexShaderExpand;
+	m_features.sprite_edge_clamp = true;
 
 	if (!m_features.texture_barrier)
 		Console.Warning("VK: Texture buffers are disabled. This may break some graphical effects.");
@@ -4125,7 +4167,9 @@ void GSDeviceVK::ResolveFeatureTable()
 
 	// Without dualSrcBlend (common on Mali), GSRendererHW blends the SRC1 draws in the shader.
 	// Ported from sashkinbro/EmuCoreX.
-	m_features.dual_source_blend = m_device_features.dualSrcBlend;
+	// gsrunner -no-dual-source reports the feature absent to the renderer while the device keeps it
+	// enabled, which is what a driver without it looks like from GSRendererHW's side.
+	m_features.dual_source_blend = m_device_features.dualSrcBlend && !g_gs_measurement_overrides.no_dual_source;
 
 	// A driver that ignores the blend constant cannot be asked for a constant-colour blend factor at
 	// all, so a fixed (AFIX) factor travels through the second fragment output instead. Read from the
@@ -4186,6 +4230,13 @@ void GSDeviceVK::ResolveFeedbackConsumers(const GSSelfReadRoadDecision& road)
 			// The barrier road's counter was timed on the M2 only; desktop Vulkan on the same road
 			// keeps the answer it had before the road existed.
 			.barrier_road_measured = m_device_rules.barrier_road_measured});
+
+	// Alpha bit 7 through a logic op (GSAlphaBitLogicOp.h), where the read it replaces waits for the
+	// GPU to drain. gsrunner -alpha-bit-logic-op forces the road question to yes, so a desktop GPU on
+	// its own road can check the pictures against the read.
+	m_features.alpha_bit_logic_op = GSAlphaBitLogicOp::DeviceQualifies(m_device_features.logicOp != 0,
+		m_features.ordered_read_costs_per_draw || g_gs_measurement_overrides.alpha_bit_logic_op,
+		m_broken_colormask_with_depth);
 
 	// The device half of the feedback-loop carry (GSDrawRoad.h). Every input is final here; the
 	// renderer adds the per-draw terms.
@@ -4348,14 +4399,19 @@ void GSDeviceVK::LogResolvedFeatures(const GSSelfReadRoadDecision& road, bool de
 	if (g_gs_measurement_overrides.Any())
 	{
 		Console.WriteLn("VK: measurement overrides: loop-spelling=%s(%s; %s) declare-arm=%u depth-loop=%s "
-						"stencil-buffer=%s",
+						"stencil-buffer=%s alpha-bit-logic-op=%s provoking-vertex=%s dual-source=%s",
 			g_gs_measurement_overrides.loop_create_flag ? "pipeline create flag" : "dynamic per draw",
 			g_gs_measurement_overrides.loop_create_flag ? "forced" : "default",
 			m_declare_loop_per_draw ? "applied" : "pipeline create flag in effect",
 			static_cast<unsigned>(g_gs_measurement_overrides.self_read_arm),
 			g_gs_measurement_overrides.declare_depth_loop ? "DECLARED" : "off",
-			g_gs_measurement_overrides.disable_stencil_buffer ? "FORCED OFF" : "device");
+			g_gs_measurement_overrides.disable_stencil_buffer ? "FORCED OFF" : "device",
+			g_gs_measurement_overrides.alpha_bit_logic_op ? (m_features.alpha_bit_logic_op ? "FORCED ON" : "FORCED but no logicOp") : "device",
+			g_gs_measurement_overrides.no_provoking_vertex ? "FORCED OFF" : "device",
+			g_gs_measurement_overrides.no_dual_source ? "FORCED OFF" : "device");
 	}
+	if (m_features.alpha_bit_logic_op)
+		Console.WriteLn("VK: alpha bit 7 marks through a logic op (no target read).");
 
 	DevCon.WriteLn("Optional features:%s%s%s%s%s%s", m_features.primitive_id ? " primitive_id" : "",
 		m_features.texture_barrier ? " texture_barrier" : "", m_features.framebuffer_fetch ? " framebuffer_fetch" : "",
@@ -4646,6 +4702,7 @@ void GSDeviceVK::DoCopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& 
 										{static_cast<u32>(r.width()), static_cast<u32>(r.height())}},
 				0u, 1u};
 			vkCmdClearAttachments(GetCurrentCommandBuffer(), 1, &ca, 1, &cr);
+			m_date_copy.valid = false; // see OMSetRenderTargets
 
 			return;
 		}
@@ -5623,6 +5680,8 @@ void GSDeviceVK::OMSetRenderTargets(
 				const GSVector2i size = vkRt ? vkRt->GetSize() : vkDs->GetSize();
 				const VkClearRect cr = {{{0, 0}, {static_cast<u32>(size.x), static_cast<u32>(size.y)}}, 0u, 1u};
 				vkCmdClearAttachments(GetCurrentCommandBuffer(), num_ca, cas.data(), 1, &cr);
+				// A clear inside the pass rewrites alpha the shared DATE stencil copy describes.
+				m_date_copy.valid = false;
 			}
 		}
 	}
@@ -7379,7 +7438,7 @@ VkShaderModule GSDeviceVK::GetTFXVertexShader(GSHWDrawConfig::VSSelector sel)
 	AddMacro(ss, "VS_IIP", sel.iip);
 	AddMacro(ss, "VS_POINT_SIZE", sel.point_size);
 	AddMacro(ss, "VS_EXPAND", static_cast<int>(sel.expand));
-	AddMacro(ss, "VS_PROVOKING_VERTEX_LAST", static_cast<int>(m_features.provoking_vertex_last));
+	AddMacro(ss, "VS_SPRITE_EDGE_CLAMP", sel.sprite_edge_clamp);
 	ss << m_tfx_source;
 	std::string source = ss.str();
 	source_timer.reset();
@@ -7439,6 +7498,7 @@ VkShaderModule GSDeviceVK::GetTFXFragmentShader(const GSHWDrawConfig::PSSelector
 	AddMacro(ss, "PS_TCOFFSETHACK", sel.tcoffsethack);
 	AddMacro(ss, "PS_REGION_RECT", sel.region_rect);
 	AddMacro(ss, "PS_NATIVE_TEXEL_GRID", sel.native_texel_grid);
+	AddMacro(ss, "PS_SPRITE_EDGE_CLAMP", sel.sprite_edge_clamp);
 	AddMacro(ss, "PS_BLEND_A", sel.blend_a);
 	AddMacro(ss, "PS_BLEND_B", sel.blend_b);
 	AddMacro(ss, "PS_BLEND_C", sel.blend_c);
@@ -7460,6 +7520,7 @@ VkShaderModule GSDeviceVK::GetTFXFragmentShader(const GSHWDrawConfig::PSSelector
 	AddMacro(ss, "PS_COLCLIP_HW", sel.colclip_hw);
 	AddMacro(ss, "PS_RTA_CORRECTION", sel.rta_correction);
 	AddMacro(ss, "PS_RTA_SRC_CORRECTION", sel.rta_source_correction);
+	AddMacro(ss, "PS_REPLACEMENT_ALPHA_SNAP", sel.replacement_alpha_snap);
 	AddMacro(ss, "PS_DITHER", sel.dither);
 	AddMacro(ss, "PS_DITHER_ADJUST", sel.dither_adjust);
 	AddMacro(ss, "PS_ZCLAMP", sel.zclamp);
@@ -7603,6 +7664,14 @@ VkPipeline GSDeviceVK::CreateTFXPipeline(const PipelineSelector& p)
 			VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 1u, 1u, 1u};
 		gpb.SetStencilState(true, sos, sos);
 	}
+	else if (p.dss.alpha_bit_stencil)
+	{
+		// GSAlphaBitLogicOp: a mark keeps the shared DATE copy true by writing it where the depth test
+		// passes, which is exactly where its logic op writes the bit.
+		const VkStencilOpState sos{VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS,
+			1u, 1u, (p.dss.alpha_bit_stencil == 2) ? 1u : 0u};
+		gpb.SetStencilState(true, sos, sos);
+	}
 
 	// Blending
 	if (IsDATEModePrimIDInit(p.ps.date))
@@ -7610,6 +7679,14 @@ VkPipeline GSDeviceVK::CreateTFXPipeline(const PipelineSelector& p)
 		// image DATE prepass
 		gpb.SetBlendAttachment(0, true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_MIN, VK_BLEND_FACTOR_ONE,
 			VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_COLOR_COMPONENT_R_BIT);
+	}
+	else if (p.cms.logic_op != GSAlphaBitLogicOp::Off)
+	{
+		// GSAlphaBitLogicOp: blending off, alpha written alone, and the logic op combines the
+		// shader's 0x80 with the stored alpha.
+		gpb.SetBlendAttachment(0, false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
+			VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, p.cms.wrgba);
+		gpb.SetLogicOp(true, (p.cms.logic_op == GSAlphaBitLogicOp::SetBit) ? VK_LOGIC_OP_OR : VK_LOGIC_OP_AND_INVERTED);
 	}
 	else if (pbs.enable)
 	{
@@ -7786,7 +7863,7 @@ namespace
 
 		return p.topology <= static_cast<u32>(GSHWDrawConfig::Topology::Triangle) && (p.key >> 8) == 0 &&
 			   p.pad == 0 && p.bs.op <= GSDevice::OP_REV_SUBTRACT &&
-			   p.vs.expand <= GSHWDrawConfig::VSExpand::TriangleAA1 && p.vs._free == 0 && p.dss._free == 0 &&
+			   p.vs.expand <= GSHWDrawConfig::VSExpand::TriangleAA1 && p.dss._free == 0 &&
 			   p.cms._free == 0 && p.ps.atst <= GSShader::PS_ATST::NOTEQUAL && p.ps.afail <= GSShader::PS_AFAIL::RGB_ONLY_SW_Z &&
 			   p.ps.rov_depth <= GSShader::PS_ROV_DEPTH::READ_ONLY &&
 			   p.ps.blend_hw <= static_cast<u32>(HWBlendType::INV_SRC_DST_BLEND_HALF);
@@ -8683,6 +8760,7 @@ void GSDeviceVK::EndRenderPass()
 	m_current_render_pass = VK_NULL_HANDLE;
 	g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 	m_render_passes_since_submit++;
+	m_render_pass_serial++;
 
 	vkCmdEndRenderPass(GetCurrentCommandBuffer());
 }
@@ -9123,6 +9201,12 @@ GSTextureVK* GSDeviceVK::SetupPrimitiveTrackingDATE(GSHWDrawConfig& config)
 	return image;
 }
 
+bool GSDeviceVK::DateCopyLive(const GSHWDrawConfig& config)
+{
+	return m_date_copy.valid && InRenderPass() && m_date_copy.pass_serial == m_render_pass_serial &&
+	       m_date_copy.rt == config.rt && m_date_copy.ds == config.ds;
+}
+
 void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 {
 	// Mid-frame kick (see m_render_passes_since_submit in the header): while a
@@ -9176,6 +9260,17 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 			EndRenderPass();
 			ExecuteCommandBuffer(WaitType::None);
 		}
+	}
+
+	// The shared destination-alpha stencil copy (GSAlphaBitLogicOp.h) survives only draws that keep
+	// it true: DATE draws sharing it, and logic-op marks, which write it where they write the bit.
+	// Any other draw that writes alpha drops it. A draw on other targets ends the pass, which drops
+	// it too (DateCopyLive).
+	if (m_date_copy.valid && config.date_copy == GSAlphaBitLogicOp::NoDateCopy &&
+		config.colormask.logic_op == GSAlphaBitLogicOp::Off &&
+		(config.colormask.wa || (config.alpha_second_pass.enable && config.alpha_second_pass.colormask.wa)))
+	{
+		m_date_copy.valid = false;
 	}
 
 	const GSVector2i rtsize(config.rt ? config.rt->GetSize() : config.ds->GetSize());
@@ -9305,7 +9400,26 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 		break;
 
 		case GSHWDrawConfig::DestinationAlphaMode::Stencil:
-			SetupDATE(draw_rt, config.ds, config.datm, config.drawarea);
+			if (config.date_copy == GSAlphaBitLogicOp::NoDateCopy)
+			{
+				SetupDATE(draw_rt, config.ds, config.datm, config.drawarea);
+			}
+			else if (!DateCopyLive(config) || m_date_copy.datm != config.datm)
+			{
+				// Built over the whole target, since the draws that share it can land anywhere.
+				m_date_copy.valid = false;
+				SetupDATE(draw_rt, config.ds, config.datm, GSVector4i::loadh(rtsize));
+				// The pass this opens holds the run that used to read the target, and a pass holding a
+				// declared feedback loop is never tiled on Turnip. Without a read left in it the
+				// driver's autotuner may tile it, and Indiana Jones' corpus scene then took 9.6 ms at
+				// 2x where it takes 7.0 untiled (Nova, axfl2-001). Declaring the loop on this one draw
+				// keeps the pass untiled, as it was, for one wait per run.
+				if (draw_rt && UseFeedbackLoopLayout())
+				{
+					pipe.feedback_loop_flags |= FeedbackLoopFlag_ReadAndWriteRT;
+					m_declare_rt_loop_without_read = true;
+				}
+			}
 			break;
 	}
 
@@ -9539,10 +9653,15 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 		}
 	}
 
+	// The pass the shared copy lives in is open now: this draw built the copy or found it live.
+	if (config.date_copy != GSAlphaBitLogicOp::NoDateCopy && config.destination_alpha == GSHWDrawConfig::DestinationAlphaMode::Stencil)
+		m_date_copy = {true, config.rt, config.ds, config.datm, m_render_pass_serial};
+
 	// Guard on stencil_buffer: devices without a stencil attachment (e.g. Adreno, forced D32F) have no
 	// stencil aspect to clear.
 	if (config.destination_alpha == GSHWDrawConfig::DestinationAlphaMode::StencilOne && m_features.stencil_buffer)
 	{
+		m_date_copy.valid = false;
 		const VkClearAttachment ca = {VK_IMAGE_ASPECT_STENCIL_BIT, 0u, {.depthStencil = {0.0f, 1u}}};
 		const VkClearRect rc = {{{config.drawarea.left, config.drawarea.top},
 									{static_cast<u32>(config.drawarea.width()), static_cast<u32>(config.drawarea.height())}},
@@ -9570,7 +9689,36 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 		UploadHWDrawVerticesAndIndices(config);
 
 	// now we can do the actual draw
-	if (BindDrawPipeline(pipe))
+	if (config.colormask.logic_op != GSAlphaBitLogicOp::Off)
+	{
+		// An alpha-bit mark (GSAlphaBitLogicOp.h): one run, or two in submission order when its
+		// primitives set the bit and then clear it (or the reverse), one op each. Nothing reads the
+		// target. Where a shared DATE stencil copy is live, each run writes it where it writes the bit.
+		pxAssert(!config.require_one_barrier && !config.require_full_barrier && config.logic_op_split < m_index.count);
+		const bool keep_copy = DateCopyLive(config) && pipe.ds &&
+			(m_date_copy.datm == SetDATM::DATM0 || m_date_copy.datm == SetDATM::DATM1);
+		if (!keep_copy)
+			m_date_copy.valid = false;
+		const bool datm = m_date_copy.datm == SetDATM::DATM1;
+		const u32 split = config.logic_op_split ? config.logic_op_split : m_index.count;
+		pipe.dss.alpha_bit_stencil = keep_copy ? GSAlphaBitLogicOp::StencilWriteFor(config.colormask.logic_op, datm) : 0;
+		if (BindDrawPipeline(pipe))
+		{
+			DeclareDrawFeedbackLoop(config, pipe);
+			Draw(config, 0, split);
+		}
+		if (split < m_index.count)
+		{
+			pipe.cms.logic_op = GSAlphaBitLogicOp::OtherOp(config.colormask.logic_op);
+			pipe.dss.alpha_bit_stencil = keep_copy ? GSAlphaBitLogicOp::StencilWriteFor(pipe.cms.logic_op, datm) : 0;
+			if (BindDrawPipeline(pipe))
+			{
+				DeclareDrawFeedbackLoop(config, pipe);
+				Draw(config, split, m_index.count - split);
+			}
+		}
+	}
+	else if (BindDrawPipeline(pipe))
 	{
 		DeclareDrawFeedbackLoop(config, pipe);
 		SendHWDraw(config, pipe.IsRTFeedbackLoop() ? draw_rt : nullptr, pipe.IsDepthFeedbackLoop() ? draw_ds : nullptr,
@@ -9584,9 +9732,7 @@ void GSDeviceVK::DoRenderHW(GSHWDrawConfig& config)
 			SetBlendConstants(config.blend_multi_pass.blend.constant);
 
 		pipe.bs = config.blend_multi_pass.blend;
-		pipe.ps.no_color1 = config.blend_multi_pass.no_color1;
-		pipe.ps.blend_hw = config.blend_multi_pass.blend_hw;
-		pipe.ps.dither = config.blend_multi_pass.dither;
+		config.blend_multi_pass.ApplyTo(pipe.ps);
 		if (BindDrawPipeline(pipe))
 		{
 			DeclareDrawFeedbackLoop(config, pipe);
@@ -9756,6 +9902,7 @@ VkDependencyFlags GSDeviceVK::GetFeedbackBarrierDependencyFlags() const
 
 void GSDeviceVK::DeclareDrawFeedbackLoop(const GSHWDrawConfig& config, const PipelineSelector& pipe)
 {
+	const bool rt_loop_without_read = std::exchange(m_declare_rt_loop_without_read, false);
 	if (!m_declare_loop_per_draw)
 		return;
 
@@ -9773,7 +9920,7 @@ void GSDeviceVK::DeclareDrawFeedbackLoop(const GSHWDrawConfig& config, const Pip
 	// which is what the pipeline create flag already does. The depth aspect is a straight mirror
 	// of the create flag it replaces -- nothing in the per-draw work declares a depth loop.
 	VkImageAspectFlags aspects = 0;
-	if (pipe.IsRTFeedbackLoop() && config.IsFeedbackLoopRT(pipe.ps))
+	if (pipe.IsRTFeedbackLoop() && (config.IsFeedbackLoopRT(pipe.ps) || rt_loop_without_read))
 		aspects |= VK_IMAGE_ASPECT_COLOR_BIT;
 	if (pipe.IsTestingAndSamplingDepth())
 		aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;

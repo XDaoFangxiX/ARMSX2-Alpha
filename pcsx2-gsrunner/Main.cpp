@@ -63,6 +63,7 @@
 #include "pcsx2/GS/GSXXH.h"
 #include "pcsx2/GS/Renderers/Common/GSRenderer.h"
 #include "pcsx2/GS/Renderers/HW/GSDrawLog.h"
+#include "pcsx2/GS/Renderers/HW/GSTextureCache.h"
 #include "pcsx2/GS/Renderers/Null/GSDeviceNone.h"
 #ifdef ENABLE_OPENGL
 #include "pcsx2/GS/Renderers/OpenGL/GLContext.h"
@@ -106,6 +107,7 @@ namespace Common
 namespace FileSystem
 {
 	int OpenFDFileContent(const char* filename) { return -1; }
+	std::vector<std::string> FindContentChdSiblings(const char* filename) { return {}; }
 	bool CreateDirectoryViaJava(const char* path) { return false; }
 	bool CreateFileViaJava(const char* path) { return false; }
 }
@@ -137,6 +139,7 @@ namespace GSRunner
 	static void SettingsOverride();
 	static bool ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& params);
 	static void DumpStats();
+	static bool ReportHashMemoVerify();
 
 	static bool CreatePlatformWindow();
 	static void DestroyPlatformWindow();
@@ -153,8 +156,8 @@ static MemorySettingsInterface s_settings_interface;
 static s32 s_clear_shader_cache_frame = -1;
 
 static std::string s_output_prefix;
-// -take-gsdump: a one-frame GS dump (and its driver report) written at this base path on the first
-// loop's second presented frame. Empty = off.
+// -take-gsdump: a one-frame GS dump (a zip of the dump, its driver report and its screenshot) written
+// at this base path on the first loop's second presented frame. Empty = off.
 static std::string s_take_gsdump_base;
 static bool s_take_gsdump_queued = false;
 static s32 s_loop_count = 1;
@@ -170,6 +173,15 @@ static std::string s_gs_pin_request;
 static u64 s_gs_pin_mask = 0;
 static std::string s_gs_pin_effective("none");
 static const char* s_gs_pin_source = "none";
+
+// -gsbackpin. Where the GS back thread (GS multi-threading) runs. Without the flag it is
+// placed by VMManager exactly as the app places it -- next to the MTGS thread -- and
+// re-derived next to the -gspin set when -gspin moves the MTGS thread. "any" restores the
+// old unplaced behaviour (every processor), for A/B runs. s_gs_back_pin_applied is what
+// the stats JSON records: "vmmanager", "near-gspin", "any", or the CPU list given.
+static std::string s_gs_back_pin_request;
+static u64 s_gs_back_pin_mask = 0;
+static std::string s_gs_back_pin_applied("vmmanager");
 
 // The CPU set this process started with, captured before anything has pinned anything.
 // It is the reference that tells "nobody narrowed this thread" apart from "something
@@ -457,9 +469,12 @@ static double s_last_pipeline_switches = 0;
 static u64 s_total_pipeline_switches = 0;
 static double s_last_native_texel_grid_draws = 0;
 static u64 s_total_native_texel_grid_draws = 0;
+static double s_last_sprite_edge_clamp_draws = 0;
+static u64 s_total_sprite_edge_clamp_draws = 0;
 static double s_last_sw_palette_block_copies = 0;
 static u64 s_total_sw_palette_block_copies = 0;
 static bool s_vm_hash = false;
+static bool s_verify_hash_memo = false;
 
 static u64 s_total_prims = 0;
 static u64 s_total_tc_source_hit = 0;
@@ -824,6 +839,7 @@ void Host::BeginPresentFrame()
 		sample.pipeline_switches = update_stat(GSPerfMon::PipelineSwitches, s_total_pipeline_switches, s_last_pipeline_switches);
 		sample.native_texel_grid_draws = update_stat(
 			GSPerfMon::NativeTexelGridDraws, s_total_native_texel_grid_draws, s_last_native_texel_grid_draws);
+		update_stat(GSPerfMon::SpriteEdgeClampDraws, s_total_sprite_edge_clamp_draws, s_last_sprite_edge_clamp_draws);
 		sample.sw_palette_block_copies = update_stat(
 			GSPerfMon::SwPaletteBlockCopies, s_total_sw_palette_block_copies, s_last_sw_palette_block_copies);
 
@@ -1143,9 +1159,9 @@ static void PrintCommandLineHelp(const char* progname)
 						 "run cannot even create an instance under it.\n");
 	std::fprintf(stderr, "  -renderdoc-frame N[,C]: Capture dump frame N (base 0, minimum 1) and the C-1 frames after it, "
 						 "one .rdc each. Defaults to 1,1. Only used if -renderdoc is used.\n");
-	std::fprintf(stderr, "  -take-gsdump <path>: write a one-frame GS dump of the replay, with its driver report, to "
-						 "<path>.gs.zst and <path>.driver.json (plus the dump's screenshot <path>.png), on the first "
-						 "loop's second frame.\n");
+	std::fprintf(stderr, "  -take-gsdump <path>: write a one-frame GS dump of the replay to <path>.gs.zip, on the first "
+						 "loop's second frame. The zip holds the dump (.gs.zst), its driver report (.driver.json) and "
+						 "its screenshot.\n");
 	std::fprintf(stderr, "  -custom-driver <dir> <libname> <hooklibdir>: Android only. Load the Vulkan driver <libname> "
 						 "out of <dir> through libadrenotools instead of the system loader, e.g. a Mesa Turnip pack in "
 						 "/data/local/tmp. <hooklibdir> holds libhook_impl.so, libmain_hook.so and "
@@ -1167,11 +1183,14 @@ static void PrintCommandLineHelp(const char* progname)
 						 "expanded in software, whether a feedback read is cheap -- so a null device with no "
 						 "features is not any real device and counts taken on it are about nothing. 'sd865' "
 						 "(default) is the Adreno 650 / Turnip render-target-copy road; 'mali-g615' is the "
-						 "Dimensity 8300 in-tile framebuffer-fetch road; 'blank' restores FeatureSupport's own "
+						 "Dimensity 8300 in-tile framebuffer-fetch road on Arm's driver; 'mali-g615-malisx2' is the "
+						 "same part on malisx2 (our driver); 'blank' restores FeatureSupport's own "
 						 "defaults, which is what the null arm reported before profiles existed. The resolved bits "
 						 "are printed at start-up. Ignored unless the renderer is nullhw.\n");
 	std::fprintf(stderr, "  -no-stencil-buffer: Vulkan only. Report no stencil buffer and create depth as plain D32F, as "
 						 "Turnip before Mesa 26.2 does, so destination-alpha tests take the no-stencil choices.\n");
+	std::fprintf(stderr, "  -alpha-bit-logic-op: Vulkan only. Set and clear alpha bit 7 (FBMSK 0x7FFFFFFF draws) with a "
+						 "logic op on any device with the logicOp feature, not only where a target read waits per draw.\n");
 	std::fprintf(stderr, "  -vertex-ring-kib <n>: Vulkan only. Start the vertex ring at n KiB instead of the shipped "
 						 "size; it still grows on demand to its cap.\n");
 	std::fprintf(stderr, "  -readback-kick-passes <n>: Vulkan only. In a frame near a readback, submit at a render-pass "
@@ -1204,6 +1223,9 @@ static void PrintCommandLineHelp(const char* progname)
 						 "its CPU time without anything in the renderer changing. The pin is read back afterwards and "
 						 "both the request and the result are written to -stats-json; a pin that did not take warns and "
 						 "the run continues.\n");
+	std::fprintf(stderr, "  -gsbackpin <cpu[,cpu...]|any>: Where the GS back thread (GS multi-threading) runs. Default: "
+						 "where VMManager puts it in the app, next to the GS thread (or next to the -gspin set when that "
+						 "is given). 'any' leaves it on every processor, the behaviour before it was placed.\n");
 	std::fprintf(stderr, "  -affinity <0-7>: Thread-placement mode handed to VMManager before the VM boots. "
 						 "0 = unpinned (every emu thread gets every processor), 1-6 = explicit per-core placements by "
 						 "EE/VU/GS priority, 7 = Performance Cores (confine the emu threads to the big tier). The "
@@ -1234,6 +1256,10 @@ static void PrintCommandLineHelp(const char* progname)
 						 "packets, so the two arms compare word for word.\n");
 	std::fprintf(stderr, "  -ladder-out <path>: Where to write the ladder rungs. Only used if -ladder is used.\n");
 	std::fprintf(stderr, "  -vmhash: Log a hash of GS local memory at every presented frame.\n");
+	std::fprintf(stderr, "  -verify-hash-memo: Check the hardware renderer's memo of texture hashes and the write stamps "
+						 "it relies on. Every memo hit also hashes the texture afresh and compares, and at every frame "
+						 "boundary each page of local memory is hashed to find stores that were not marked. Prints one "
+						 "HASH-MEMO-VERIFY line at exit and exits non-zero on a mismatch or a missed writer.\n");
 	std::fprintf(stderr, "  -stats-json <path>: Write per-frame and run-summary statistics as JSON. Combine with -perf "
 						 "for frame/GPU timing.\n");
 	std::fprintf(stderr, "  -set <Section/Key>=<value>: Override any setting, e.g. -set EmuCore/GS/AccurateBlendingUnit=3. "
@@ -1265,6 +1291,13 @@ static void PrintCommandLineHelp(const char* progname)
 						 "-- only when it is stated changes, and that is byte-identical. Measurement instrument only: "
 						 "on Turnip the create flag puts the driver's serialising primitive mode on every pipeline in "
 						 "a latched pass and costs up to 2.8x (wrc3@1x, SD865: 51.8 ms against 18.5). Vulkan only.\n");
+	std::fprintf(stderr, "  -no-provoking-vertex: Run as a device without VK_EXT_provoking_vertex, the way Qualcomm's "
+						 "stock Adreno driver does. Pipelines use the first-vertex default, so the provoking-first "
+						 "paths (software flat-shading fixup, expanded-line vertex shader) run on a device that has "
+						 "the extension. Vulkan only.\n");
+	std::fprintf(stderr, "  -no-dual-source: Run as a device without dualSrcBlend, the way Arm's stock Mali driver "
+						 "does. GSRendererHW blends every SRC1 equation in the shader rather than through the second "
+						 "fragment output, so a device that has dual-source blending runs the fallback. Vulkan only.\n");
 	std::fprintf(stderr, "  -accblend <0-5>: Force accurate blending unit (0=Minimum, 1=Basic, 2=Medium, 3=High, 4=Full, 5=Maximum). "
 						 "Overrides the game/global default; use to exercise the SW-blend / fb-fetch (ROV) path headlessly.\n");
 	std::fprintf(stderr, "  --: Signals that no more arguments will follow and the remaining\n"
@@ -1736,6 +1769,12 @@ bool GSRunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
 				s_vm_hash = true;
 				continue;
 			}
+			else if (CHECK_ARG("-verify-hash-memo"))
+			{
+				s_verify_hash_memo = true;
+				GSTextureCache::SetHashMemoVerify(true);
+				continue;
+			}
 			else if (CHECK_ARG_PARAM("-drawlog"))
 			{
 				s_drawlog_path = argv[++i];
@@ -1753,6 +1792,19 @@ bool GSRunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
 				}
 				s_gs_pin_request = cpus;
 				Console.WriteLn(fmt::format("Pinning the GS thread to CPU(s) {}", s_gs_pin_request));
+				continue;
+			}
+			else if (CHECK_ARG_PARAM("-gsbackpin"))
+			{
+				const std::string cpus(StringUtil::StripWhitespace(argv[++i]));
+				if (cpus != "any" && (!ParseCpuList(cpus, &s_gs_back_pin_mask) || s_gs_back_pin_mask == 0))
+				{
+					ArgError("-gsbackpin: '{}' is not a CPU list or 'any' (expected e.g. 5 or 4,5,6,7).", cpus);
+					return false;
+				}
+				if (cpus == "any")
+					s_gs_back_pin_mask = 0;
+				s_gs_back_pin_request = cpus;
 				continue;
 			}
 			else if (CHECK_ARG_PARAM("-affinity"))
@@ -1875,6 +1927,32 @@ bool GSRunner::ParseCommandLineArgs(int argc, char* argv[], VMBootParameters& pa
 				// choices on a device that has D32S8, for an A/B on one binary.
 				g_gs_measurement_overrides.disable_stencil_buffer = true;
 				Console.WriteLn("Forcing the stencil buffer off (depth as plain D32F)");
+				continue;
+			}
+			else if (CHECK_ARG("-alpha-bit-logic-op"))
+			{
+				// Not a setting: where the logic op pays is a driver fact. This takes it on any Vulkan
+				// device with the logicOp feature, to check its pictures against the read.
+				g_gs_measurement_overrides.alpha_bit_logic_op = true;
+				Console.WriteLn("Forcing the alpha-bit logic op on (Vulkan, where logicOp exists)");
+				continue;
+			}
+			else if (CHECK_ARG("-no-provoking-vertex"))
+			{
+				// Not a setting: whether a device has a usable provoking-last mode is a driver fact
+				// (Qualcomm's stock Adreno driver selects the wrong vertex). This puts that driver's
+				// provoking-first paths on a device that has the extension, for an A/B on one binary.
+				g_gs_measurement_overrides.no_provoking_vertex = true;
+				Console.WriteLn("Forcing provoking-vertex-last off (Vulkan, as a device without VK_EXT_provoking_vertex)");
+				continue;
+			}
+			else if (CHECK_ARG("-no-dual-source"))
+			{
+				// Not a setting: whether a device has dual-source blending is a driver fact (Arm's
+				// stock Mali driver reports dualSrcBlend false). This puts that driver's shader-blend
+				// fallback on a device that has the feature, for an A/B on one binary.
+				g_gs_measurement_overrides.no_dual_source = true;
+				Console.WriteLn("Forcing dual-source blending off (Vulkan, as a device without dualSrcBlend)");
 				continue;
 			}
 			else if (CHECK_ARG_PARAM("-vertex-ring-kib"))
@@ -2396,6 +2474,7 @@ static void WriteStatsJson(const std::string& path)
 		s_total_hash_cache_hit, s_total_hash_cache_miss);
 	std::fprintf(fp.get(), "    \"pipeline_switches\": %s,\n", j_u64(s_total_pipeline_switches).c_str());
 	std::fprintf(fp.get(), "    \"native_texel_grid_draws\": %" PRIu64 ",\n", s_total_native_texel_grid_draws);
+	std::fprintf(fp.get(), "    \"sprite_edge_clamp_draws\": %" PRIu64 ",\n", s_total_sprite_edge_clamp_draws);
 	std::fprintf(fp.get(), "    \"sw_palette_block_copies\": %" PRIu64 ",\n", s_total_sw_palette_block_copies);
 	std::fprintf(fp.get(), "    \"gpu_blocking_waits\": %s,\n", j_u64(s_total_gpu_blocking_waits).c_str());
 	std::fprintf(fp.get(), "    \"gs_cpu_ms\": %.3f,\n    \"gs_cpu_us_per_draw\": %.3f,\n    \"gs_cpu_us_per_draw_call\": %.3f,\n",
@@ -2409,6 +2488,7 @@ static void WriteStatsJson(const std::string& path)
 	std::fprintf(fp.get(), "    \"gs_pin_requested\": \"%s\",\n    \"gs_pin_effective\": \"%s\",\n",
 		s_gs_pin_request.empty() ? "none" : json_escape(s_gs_pin_request).c_str(), json_escape(s_gs_pin_effective).c_str());
 	std::fprintf(fp.get(), "    \"gs_pin_source\": \"%s\",\n", s_gs_pin_source);
+	std::fprintf(fp.get(), "    \"gs_back_pin\": \"%s\",\n", json_escape(s_gs_back_pin_applied).c_str());
 	// The thread-placement mode VMManager ran under, who chose it, and the CPU set this
 	// process inherited before anything narrowed it. affinity_mode is -1 with source
 	// "unsupported" on a build with no affinity path. inherited_cpu_mask is a hex mask
@@ -2491,6 +2571,21 @@ static void WriteStatsJson(const std::string& path)
 	Console.WriteLn(fmt::format("Wrote {} frame samples to {}", s_frame_samples.size(), path));
 }
 
+// Prints what -verify-hash-memo found. False if the memo returned a hash that a fresh one disagrees with,
+// or a store into local memory went unmarked.
+bool GSRunner::ReportHashMemoVerify()
+{
+	if (!s_verify_hash_memo)
+		return true;
+
+	const GSTextureCache::HashMemoVerifyReport report = GSTextureCache::GetHashMemoVerifyReport();
+	const std::string line = fmt::format("HASH-MEMO-VERIFY hits={} mismatches={} sweeps={} missed_writers={}",
+		report.hits, report.mismatches, report.sweeps, report.missed_writers);
+	Console.WriteLn(line);
+	std::fprintf(stderr, "%s\n", line.c_str());
+	return report.mismatches == 0 && report.missed_writers == 0;
+}
+
 void GSRunner::DumpStats()
 {
 	std::atomic_thread_fence(std::memory_order_acquire);
@@ -2550,6 +2645,8 @@ void GSRunner::DumpStats()
 		Ratio(s_total_hash_cache_hit, s_total_hash_cache_hit + s_total_hash_cache_miss)));
 	Console.WriteLn(fmt::format("@HWSTAT@ Native Texel Grid Draws: {} (avg {})", s_total_native_texel_grid_draws,
 		static_cast<u64>(std::ceil(s_total_native_texel_grid_draws / static_cast<double>(s_total_drawn_frames)))));
+	Console.WriteLn(fmt::format("@HWSTAT@ Sprite Edge Clamp Draws: {} (avg {})", s_total_sprite_edge_clamp_draws,
+		static_cast<u64>(std::ceil(s_total_sprite_edge_clamp_draws / static_cast<double>(s_total_drawn_frames)))));
 	if (s_perf_enable)
 	{
 		Console.WriteLn(fmt::format("@HWSTAT@ Minimum Frame Time: {:.3f} ms ({:.3f} FPS)", PerformanceMetrics::GetMinimumFrameTime(), 1000.0f / PerformanceMetrics::GetMinimumFrameTime()));
@@ -2748,6 +2845,28 @@ static void ApplyGSThreadPin()
 	}
 }
 
+// Places the GS back thread after ApplyGSThreadPin, for the same reason that runs after
+// VMManager::Initialize: VMManager places the back thread during Initialize, and this has
+// to be the last word. The back thread may start before or after this; VMManager hands a
+// thread that registers later the placement set here.
+static void ApplyGSBackThreadPin()
+{
+	if (!s_gs_back_pin_request.empty())
+	{
+		VMManager::Internal::SetGSBackThreadAffinity(s_gs_back_pin_mask);
+		s_gs_back_pin_applied = s_gs_back_pin_request;
+		Console.WriteLn(fmt::format("GS back thread placed on CPU(s) {} (-gsbackpin)",
+			s_gs_back_pin_mask ? FormatCpuMask(s_gs_back_pin_mask) : std::string("any")));
+	}
+	else if (!s_gs_pin_request.empty() && s_gs_pin_mask != 0)
+	{
+		const u64 mask = VMManager::Internal::PlaceGSBackThreadNearGSThread();
+		s_gs_back_pin_applied = "near-gspin";
+		Console.WriteLn(fmt::format("GS back thread placed next to the -gspin set: CPU(s) {}",
+			mask ? FormatCpuMask(mask) : std::string("any")));
+	}
+}
+
 static void CPUThreadMain(VMBootParameters* params, std::atomic<int>* ret)
 {
 	ret->store(EXIT_FAILURE);
@@ -2769,6 +2888,7 @@ static void CPUThreadMain(VMBootParameters* params, std::atomic<int>* ret)
 			// Moving this call any earlier means that pin quietly overwrites -gspin, and
 			// the only visible symptom would be that the flag stops doing anything.
 			ApplyGSThreadPin();
+			ApplyGSBackThreadPin();
 
 			// run until end
 			GSDumpReplayer::SetLoopCount(s_loop_count);
@@ -2805,7 +2925,8 @@ static void CPUThreadMain(VMBootParameters* params, std::atomic<int>* ret)
 				s_extended_stats_snapshot = g_gs_device->GetExtendedStats();
 			VMManager::Shutdown(false);
 			GSRunner::DumpStats();
-			ret->store(ladder_ok ? EXIT_SUCCESS : EXIT_FAILURE);
+			const bool verify_ok = GSRunner::ReportHashMemoVerify();
+			ret->store((ladder_ok && verify_ok) ? EXIT_SUCCESS : EXIT_FAILURE);
 		}
 	}
 

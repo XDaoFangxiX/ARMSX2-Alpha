@@ -716,7 +716,7 @@ struct alignas(16) GSHWDrawConfig
 				u8 iip : 1;
 				u8 point_size : 1;		///< Set when points need to be expanded without VS expanding.
 				VSExpand expand : 3;
-				u8 _free : 1;
+				u8 sprite_edge_clamp : 1; ///< ST carries each sprite's far-edge sample limit; see PSSelector::sprite_edge_clamp.
 			};
 			u8 key;
 		};
@@ -802,6 +802,7 @@ struct alignas(16) GSHWDrawConfig
 				u32 colclip_hw     : 1; // colclip (COLCLAMP off) emulation through HQ textures
 				u32 rta_correction : 1;
 				u32 rta_source_correction : 1;
+				u32 replacement_alpha_snap : 1; // pack texture alpha near 0x80 is 0x80; see GSReplacementAlphaSnap.h
 				u32 colclip        : 1; // COLCLAMP off (color blend outputs wrap around 0-255)
 				u32 blend_mix      : 2;
 				u32 round_inv      : 1; // Blending will invert the value, so rounding needs to go the other way
@@ -857,6 +858,11 @@ struct alignas(16) GSHWDrawConfig
 				// writes the per-triangle alpha step to both outputs instead of a colour, for a blend
 				// of source DST_ALPHA and destination SRC1_ALPHA. Reads nothing.
 				u32 stencil_counter : 1;
+
+				// A sprite whose far edge the pixel-grid snap pushed out reads no further than its
+				// last native pixel did. The limit rides in the vertex ST, which an FST sprite does
+				// not otherwise use; see CorrectSpriteCoverageForUpscale.
+				u32 sprite_edge_clamp : 1;
 			};
 
 			struct
@@ -1052,8 +1058,11 @@ struct alignas(16) GSHWDrawConfig
 				u8 zwe  : 1;
 				u8 date : 1;
 				u8 date_one : 1;
+				// GSAlphaBitLogicOp: a logic-op mark that also keeps the destination-alpha stencil copy
+				// true: 0 leaves the stencil alone, 1 writes 0 (the test now fails), 2 writes 1.
+				u8 alpha_bit_stencil : 2;
 
-				u8 _free : 3;
+				u8 _free : 1;
 			};
 			u8 key;
 		};
@@ -1077,7 +1086,9 @@ struct alignas(16) GSHWDrawConfig
 				u8 wb : 1;
 				u8 wa : 1;
 
-				u8 _free : 4;
+				// GSAlphaBitLogicOp: 0 none, 1 OR, 2 AND_INVERTED. Only Vulkan sets it.
+				u8 logic_op : 2;
+				u8 _free : 2;
 			};
 			struct
 			{
@@ -1331,6 +1342,8 @@ struct alignas(16) GSHWDrawConfig
 	u32 nverts;            ///< Number of vertices
 	u32 nindices;          ///< Number of indices
 	u32 indices_per_prim;  ///< Number of indices that make up one primitive
+	u32 logic_op_split;    ///< With colormask.logic_op set: the indices before this one take that op, the rest the opposite (GSAlphaBitLogicOp.h). 0 = one op for the whole draw.
+	u8 date_copy;          ///< GSAlphaBitLogicOp::DateCopy: 1 = a Stencil DATE draw that may reuse the stencil copy left by the previous one in the same render pass, and leaves it true.
 	const std::vector<size_t>* drawlist;          ///< For reducing barriers on sprites
 	const std::vector<GSVector4i>* drawlist_bbox; ///< For RT copy when barriers not available.
 	GSVector4i scissor; ///< Scissor rect
@@ -1386,6 +1399,27 @@ struct alignas(16) GSHWDrawConfig
 		u8 no_color1 : 1;
 		u8 blend_hw : 3; // HWBlendType
 		u8 dither : 2;
+		/// The second pass runs the first pass's shader with its software-blend bits (blend_a, blend_b,
+		/// blend_d, blend_mix) cleared. blend_hw types 1-3 are only a pure function of the colour and
+		/// alpha when those are clear: with them set the shader takes its software-blend branch, where
+		/// the same codes mean something else.
+		u8 clear_sw_blend : 1;
+
+		/// Turns the first pass's pixel shader selector into the second pass's. Every backend that runs
+		/// the second pass takes the selector from here, so they cannot differ on what it changes.
+		void ApplyTo(PSSelector& ps) const
+		{
+			ps.no_color1 = no_color1;
+			ps.blend_hw = blend_hw;
+			ps.dither = dither;
+			if (clear_sw_blend)
+			{
+				ps.blend_a = 0;
+				ps.blend_b = 0;
+				ps.blend_d = 0;
+				ps.blend_mix = 0;
+			}
+		}
 	};
 	static_assert(sizeof(BlendMultiPass) == 8, "blend multi pass is 8 bytes");
 
@@ -1536,10 +1570,12 @@ public:
 	{
 		bool broken_point_sampler : 1; ///< Issue with AMD cards, see tfx shader for details
 		bool vs_expand            : 1; ///< Supports expanding points/lines/sprites in the vertex shader
+		bool sprite_edge_clamp    : 1; ///< The shaders implement PSSelector::sprite_edge_clamp.
 		bool primitive_id         : 1; ///< Supports primitive ID for use with prim tracking destination alpha algorithm
 		bool texture_barrier      : 1; ///< Supports sampling rt and hopefully texture barrier
 		bool multidraw_fb_copy    : 1; ///< Replacement for texture barrier.
 		bool cheap_rt_feedback_read : 1; ///< A feedback read costs nothing structural — no render-pass break, no tile flush — so the renderer may take one on a draw that did not need it. ⚠️ `!texture_barrier` is NOT a substitute: it is equally true of every driver on the RT-copy feedback workaround, where the read is the most expensive one we have.
+		bool alpha_bit_logic_op   : 1; ///< A draw that writes only alpha bit 7 (32-bit frame, FBMSK 0x7FFFFFFF) sets or clears it with a Vulkan logic op instead of reading the target for the shader-emulated mask. Vulkan only, with the logicOp feature, on the road where an ordered read costs a wait per draw (ordered_read_costs_per_draw). See GSAlphaBitLogicOp.h.
 		bool fast_stencil_shadow  : 1; ///< The alpha stencil counter (flat triangles storing their own pixel's alpha times 127/128 or 130/128) is drawn by one dual-source blend instead of a render-target read, and the hardware renderer stops auto-flush from splitting it. Set by Vulkan only, with dual-source blending, on the copy road (each read is a pass break plus a copy) or on a declared feedback loop (each read is in-pass but auto-flush still splits the volume). See GSFastStencilShadow.h. ⚠️ Never infer it from `!texture_barrier`: that bit says whether an in-pass read is legal, not what a read costs, and D3D11 runs without barriers too, with cheap copies and no shader for it.
 		bool provoking_vertex_last: 1; ///< Supports using the last vertex in a primitive as the value for flat shading.
 		bool point_expand         : 1; ///< Supports point expansion in hardware.

@@ -2106,6 +2106,7 @@ void GSDevice11::SetupPS(const PSSelector& sel, const GSHWDrawConfig::PSConstant
 		sm.AddMacro("PS_COLCLIP_HW", sel.colclip_hw);
 		sm.AddMacro("PS_RTA_CORRECTION", sel.rta_correction);
 		sm.AddMacro("PS_RTA_SRC_CORRECTION", sel.rta_source_correction);
+		sm.AddMacro("PS_REPLACEMENT_ALPHA_SNAP", sel.replacement_alpha_snap);
 		sm.AddMacro("PS_COLCLIP", sel.colclip);
 		sm.AddMacro("PS_BLEND_A", sel.blend_a);
 		sm.AddMacro("PS_BLEND_B", sel.blend_b);
@@ -3309,9 +3310,7 @@ void GSDevice11::DoRenderHW(GSHWDrawConfig& config)
 
 	if (config.blend_multi_pass.enable)
 	{
-		config.ps.no_color1 = config.blend_multi_pass.no_color1;
-		config.ps.blend_hw = config.blend_multi_pass.blend_hw;
-		config.ps.dither = config.blend_multi_pass.dither;
+		config.blend_multi_pass.ApplyTo(config.ps);
 		SetupPS(config.ps, &config.cb_ps, config.sampler);
 		SetupOM(config.depth, OMBlendSelector(config.colormask, config.blend_multi_pass.blend), config.blend_multi_pass.blend.constant);
 		Draw(config);

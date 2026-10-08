@@ -91,6 +91,17 @@ bool GSRendererHWFunctions::SwPrimRender(GSRendererHW& hw, bool invalidate_tc, b
 	return true;
 }
 
+// Mark the pages a draw through the software scanline core can have written: the frame and the depth buffer,
+// over the bounding box. Unconditional, whatever the masks and tests are (the solid sprite fill writes the
+// frame on a partial mask without fwrite). One pixel more on every side: the box is the floor and ceiling of the
+// vertex extent, and nothing shows that it holds every AA1 edge pixel.
+static void MarkDrawWritten(GSLocalMemory& mem, const GSDrawingContext* context, const GSVector4i& bbox)
+{
+	const GSVector4i grown(std::max(bbox.x - 1, 0), std::max(bbox.y - 1, 0), bbox.z + 1, bbox.w + 1);
+	mem.MarkPagesWritten(context->offset.fb, grown);
+	mem.MarkPagesWritten(context->offset.zb, grown);
+}
+
 bool GSSwPrimRenderFunctions::Run(GSRenderer& hw, GSSwPrimRenderState& sw, const GSVector4i& bbox)
 {
 	GSVertexTrace& vt = hw.m_vt;
@@ -233,7 +244,9 @@ bool GSSwPrimRenderFunctions::Run(GSRenderer& hw, GSSwPrimRenderState& sw, const
 				gd.sel.tfx = TFX_DECAL;
 			}
 
-			hw.CalculatePrimitiveCoversWithoutGaps();
+			// GetTextureMinMax() reads whether the sprites tile the draw; nothing here reads whether
+			// their union covers it.
+			hw.CalculatePrimitiveCoversWithoutGaps(false);
 
 			bool mipmap = hw.IsMipMapActive();
 
@@ -605,6 +618,7 @@ bool GSSwPrimRenderFunctions::Run(GSRenderer& hw, GSSwPrimRenderState& sw, const
 	if (sw.palette_block_copy && IsPaletteBlockCopy(data, PRIM->FST) && DrawPaletteBlocks(sw, data))
 	{
 		g_perfmon.Put(GSPerfMon::SwPaletteBlockCopies, 1);
+		MarkDrawWritten(hw.m_mem, context, bbox);
 		return true;
 	}
 
@@ -612,6 +626,7 @@ bool GSSwPrimRenderFunctions::Run(GSRenderer& hw, GSSwPrimRenderState& sw, const
 		sw.rasterizer = std::make_unique<GSSingleRasterizer>();
 
 	static_cast<GSSingleRasterizer*>(sw.rasterizer.get())->Draw(data);
+	MarkDrawWritten(hw.m_mem, context, bbox);
 
 	return true;
 }

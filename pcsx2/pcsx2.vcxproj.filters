@@ -845,6 +845,36 @@
     <ClCompile Include="SPU2\Wavedump_wav.cpp">
       <Filter>System\Ps2\SPU2</Filter>
     </ClCompile>
+    <ClCompile Include="DEV9\ACATA.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATAPI.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATA_IO.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACATA_IO_CHD.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACCORE.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACJV.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACRAM.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACSRAM.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACUART.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
+    <ClCompile Include="DEV9\ACUART_GLUE.cpp">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClCompile>
     <ClCompile Include="DEV9\AdapterUtils.cpp">
       <Filter>System\Ps2\DEV9</Filter>
     </ClCompile>
@@ -998,6 +1028,9 @@
     <ClCompile Include="GS\GSDump.cpp">
       <Filter>System\Ps2\GS</Filter>
     </ClCompile>
+    <ClCompile Include="GS\GSDumpBundle.cpp">
+      <Filter>System\Ps2\GS</Filter>
+    </ClCompile>
     <ClCompile Include="GS\GSLocalMemory.cpp">
       <Filter>System\Ps2\GS</Filter>
     </ClCompile>
@@ -1118,6 +1151,9 @@
     <ClCompile Include="GS\DriverReport\GSDriverReport.cpp">
       <Filter>System\Ps2\GS</Filter>
     </ClCompile>
+    <ClCompile Include="GS\DriverReport\GSDriverReportActive.cpp">
+      <Filter>System\Ps2\GS</Filter>
+    </ClCompile>
     <ClCompile Include="GS\DriverReport\GSDriverReportClassify.cpp">
       <Filter>System\Ps2\GS</Filter>
     </ClCompile>
@@ -1164,6 +1200,9 @@
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="GS\Renderers\HW\GSTextureReplacements.cpp">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClCompile>
+    <ClCompile Include="GS\Renderers\HW\GSTextureUpscaler.cpp">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClCompile>
     <ClCompile Include="GS\Renderers\HW\GSTextureReplacementLoaders.cpp">
@@ -1784,6 +1823,48 @@
     <ClInclude Include="SPU2\spdif.h">
       <Filter>System\Ps2\SPU2</Filter>
     </ClInclude>
+    <ClInclude Include="DEV9\ACATA.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACATAPI.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACATA_IO_CHD.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACATA_IO_WRITES.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACATA_internal.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACCORE.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACDEV.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACJV.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACJV_Inputs.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACMACROS.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACRAM.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACSRAM.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACUART.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
+    <ClInclude Include="DEV9\ACUART_GLUE.h">
+      <Filter>System\Ps2\DEV9</Filter>
+    </ClInclude>
     <ClInclude Include="DEV9\AdapterUtils.h">
       <Filter>System\Ps2\DEV9</Filter>
     </ClInclude>
@@ -1938,6 +2019,9 @@
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\GSDump.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\GSDumpBundle.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\GSLocalMemory.h">
@@ -2136,7 +2220,16 @@
     <ClInclude Include="VMManager.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="GS\Renderers\HW\GSTexelAddressedDraw.h">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClInclude>
     <ClInclude Include="GS\Renderers\HW\GSTextureReplacements.h">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\HW\GSTextureUpscaleSupport.h">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\HW\GSTextureUpscaler.h">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClInclude>
     <ClInclude Include="x86\iR5900Analysis.h">
@@ -2579,6 +2672,12 @@
     <ClInclude Include="GS\Renderers\Common\GSCopyRoadBlendingPolicy.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
+    <ClInclude Include="GS\Renderers\Common\GSAlphaBitLogicOp.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\Common\GSReplacementAlphaSnap.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSFastStencilShadow.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
@@ -2619,6 +2718,9 @@
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\DriverReport\GSDriverReport.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\DriverReport\GSDriverReportActive.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\DriverReport\GSDriverReportClassify.h">

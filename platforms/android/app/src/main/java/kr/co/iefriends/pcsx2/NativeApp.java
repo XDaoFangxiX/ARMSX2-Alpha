@@ -250,6 +250,65 @@ public class NativeApp {
 
 	/** Press/release one GUNCON_* binding on a port. */
 	public static native void usbLightgunButton(int port, int bind, boolean pressed);
+
+	// ---- Namco System 246/256 arcade games (.acgame) ----------------------------
+	/** Cabinet controls, from the core's JVS_MODE (pcsx2/DEV9/ACJV.h). */
+	public static final int ARCADE_MODE_GENERIC = 0;
+	public static final int ARCADE_MODE_LIGHTGUN = 1;
+	public static final int ARCADE_MODE_FIGHTING = 2;
+	public static final int ARCADE_MODE_RACING = 3;
+	public static final int ARCADE_MODE_DRUM = 4;
+	public static final int ARCADE_MODE_TOUCH = 5;
+	public static final int ARCADE_MODE_STANDARD = 6;
+	public static final int ARCADE_MODE_TWINSTICK = 7;
+
+	/**
+	 * Where the files an .acgame names were found (boot ELF, media image, SRAM file), as paths or
+	 * content:// URIs, for the next runVMThread only. A null or empty one is looked for next to the
+	 * .acgame, which only works for a plain path.
+	 */
+	public static native void setArcadeLaunchFiles(String elf, String media, String sram);
+
+	/** Why the last runVMThread could not boot, or "" when it did. */
+	public static native String getLastBootError();
+
+	/** The cabinet controls (ARCADE_MODE_*) the core gives a game ID such as NM00004. */
+	public static native int arcadeModeForGameId(String gameId);
+
+	/** Whether the running game is an arcade one. */
+	public static native boolean isArcadeSession();
+
+	/** A coin in player 1's (0) or player 2's (1) slot. */
+	public static native void arcadeInsertCoin(int player);
+
+	/** Holds or lets go of the cabinet's Service button. */
+	public static native void arcadeService(boolean pressed);
+
+	/** Flips the board's Test switch (the game's test menu). */
+	public static native void arcadeToggleTest();
+
+	/** Whether the Test switch is on. */
+	public static native boolean arcadeTestModeOn();
+
+	/** Whether a BIOS file is an arcade board's (COH-H). */
+	public static native boolean isArcadeBios(String path);
+
+	/** The board whose BIOS the arcade game needs when none of the arcade BIOS files there runs it
+	 *  ("System 246" for Battle Gear 3, which rejects the System 256 one), else "": the core's choice at boot. */
+	public static native String getArcadeBiosNeed(String gameId);
+
+	/** The jobs the pad's buttons do on an arcade game's cabinet, for the Arcade controls settings:
+	 *  "mode\tN" first, then a job a line (name, default pad keys, fixed), as native-lib.cpp says. */
+	public static native String getArcadeControls(String gameId);
+
+	/** The player's own layout for the arcade game being played: pairs of pad keys (a button, then the
+	 *  button whose job it does, -1 for none). Null or empty: the cabinet's own layout. */
+	public static native void setArcadeRemap(int[] pairs);
+
+	/** Every arcade game the database knows, one per line: game ID, name, board (System246,
+	 *  System256 or System SUPER256) and media (CD, DVD or HDD), tab separated. */
+	public static native String getArcadeGames();
+
 	public static native String getGameTitle(String path);
 	public static native String getGameSerial();
 	public static native String getGameCRC();
@@ -495,6 +554,16 @@ public class NativeApp {
 	 *  or before first input) — solo play is unchanged. No-op with no vibrator. */
 	public static void onPadRumble(int pad, int largeMotor, int smallMotor) {
 		if (!sRumbleEnabled) return;
+		// Native calls this with no exception check (Native::onPadRumble), so nothing may escape:
+		// a throw would leave the IOP thread with a pending exception, which aborts the app at
+		// its next JNI call.
+		try {
+			rumblePlayer(pad, largeMotor, smallMotor);
+		} catch (Throwable ignored) {
+		}
+	}
+
+	private static void rumblePlayer(int pad, int largeMotor, int smallMotor) {
 		int devId = com.armsx2.input.PadRouter.INSTANCE.deviceIdForPort(pad);
 		// Nothing has claimed this slot yet: deal out the pads nobody has spoken for, rather
 		// than guessing. "The pad you last touched" names the SAME controller for every port,
@@ -511,7 +580,18 @@ public class NativeApp {
 		if (devId < 0 && pad != touchPad) return;
 		float low = Math.max(0f, Math.min(1f, largeMotor / 255f));   // low-frequency / large
 		float high = Math.max(0f, Math.min(1f, smallMotor / 255f));  // high-frequency / small
-		vibrateDevice(devId, low, high, RUMBLE_MS, pad == touchPad);
+		vibratePlayer(pad, devId, low, high, RUMBLE_MS, pad == touchPad);
+	}
+
+	/** [devId] and every other controller playing as [port] (PadRouter.otherDevicesForPort): a
+	 *  handheld's own controls and a pad for the TV can both be player 1, and both should feel
+	 *  it. Each goes where its own rumble setting says. The handheld's own motor, which several
+	 *  of them can fall back to, is driven once. */
+	private static void vibratePlayer(int port, int devId, float low, float high, int ms, boolean allowSystemFallback) {
+		boolean handheld = vibrateDevice(devId, low, high, ms, allowSystemFallback);
+		for (int other : com.armsx2.input.PadRouter.INSTANCE.otherDevicesForPort(port, devId)) {
+			handheld |= vibrateDevice(other, low, high, ms, allowSystemFallback && !handheld);
+		}
 	}
 
 	// ---- Achievement / notification sound playback ----
@@ -571,8 +651,9 @@ public class NativeApp {
 	/** Drive [devId]'s vibrator(s) with the PS2 large/high motor intensities for [ms].
 	 *  When the controller exposes no usable vibrator and [allowSystemFallback] is set,
 	 *  drive the device's own haptic motor instead (issue #241 — handhelds like the
-	 *  Odin 3 whose built-in gamepad has no rumble actuator, only system haptics). */
-	private static void vibrateDevice(int devId, float low, float high, int ms, boolean allowSystemFallback) {
+	 *  Odin 3 whose built-in gamepad has no rumble actuator, only system haptics).
+	 *  @return true when it drove the device's own haptic motor. */
+	private static boolean vibrateDevice(int devId, float low, float high, int ms, boolean allowSystemFallback) {
 		try {
 			InputDevice dev = (devId >= 0) ? InputDevice.getDevice(devId) : null;
 
@@ -583,7 +664,7 @@ public class NativeApp {
 			// player's rumble somewhere else" has to be sayable by hand.
 			com.armsx2.input.PadRouter.RumbleMode mode =
 				com.armsx2.input.PadRouter.INSTANCE.rumbleModeForDevice(devId);
-			if (mode == com.armsx2.input.PadRouter.RumbleMode.OFF) return;
+			if (mode == com.armsx2.input.PadRouter.RumbleMode.OFF) return false;
 			boolean forceDevice = mode == com.armsx2.input.PadRouter.RumbleMode.DEVICE;
 
 			// Single combined motor can't reproduce both PS2 actuators, so blend
@@ -605,7 +686,7 @@ public class NativeApp {
 					float scale = (Float.isFinite(sHapticScale) && sHapticScale >= 0f) ? sHapticScale : 1f;
 					int l = Math.round(Math.min(1f, low * scale) * 255f);
 					int h = Math.round(Math.min(1f, high * scale) * 255f);
-					if (usb.rumble(Math.max(0, l), Math.max(0, h))) return;
+					if (usb.rumble(Math.max(0, l), Math.max(0, h))) return false;
 				}
 				drove = driveMotors(motorsOf(dev), low, high, combined, ms);
 			}
@@ -623,10 +704,11 @@ public class NativeApp {
 			// object and buzzing it is exactly right.
 			if (!drove && allowSystemFallback
 				&& (forceDevice || sRumbleFallbackExternal || !isExternalPad(dev))) {
-				rumbleOne(systemVibrator(), combined, ms);
+				return rumbleOne(systemVibrator(), combined, ms);
 			}
 		} catch (Throwable ignored) {
 		}
+		return false;
 	}
 
 	/**
@@ -794,7 +876,7 @@ public class NativeApp {
 		if (devId < 0) devId = nthGamepadDeviceId(port);
 		// devId may stay -1 (touch-only / Odin built-in with no rumble); vibrateDevice
 		// then falls back to the device's own haptic so the test still buzzes (issue #241).
-		vibrateDevice(devId, 0.9f, 0.9f, 500, true);
+		vibratePlayer(port, devId, 0.9f, 0.9f, 500, true);
 	}
 
 	/** One-line report of [port]'s controller and whether Android exposes any vibrator
@@ -883,6 +965,10 @@ public class NativeApp {
 	 *  instead of OpenGL. The decision needs the driver-bug database (keyed on a parsed driver
 	 *  revision), which lives natively, so the app supplies the strings rather than the verdict. */
 	public static native void setAutoRendererGpuStrings(String vendor, String renderer, String version);
+	/** Whether the driver list offers malisx2 for this device's GPU (CustomDriver.offersMaliSX2).
+	 *  Pushed once at startup. The core pairs it with the driver the open Vulkan device is on and
+	 *  posts the "get malisx2" OSD notice at game start when that driver is not malisx2. */
+	public static native void setMaliSX2Offered(boolean offered);
 	/** Affinity Control Mode: 0 off (scheduler decides), 1-6 EE/VU/GS priority orders,
 	 *  7 Performance Cores. Read when the VM boots — set it before runVMThread. */
 	public static native void setAffinityMode(int mode);
@@ -996,12 +1082,17 @@ public class NativeApp {
 	// in the savestate folder (see VMManager::SAVESTATE_SLOT_AUTOSAVE) so the
 	// numbered slots 0-9 stay user-controlled. saveAutosaveState is called
 	// from the in-game "Save State And Exit" menu; hasAutosaveState gates
-	// the load picker's autosave tile.
-	public static native boolean saveAutosaveState();
+	// the load picker's autosave tile. That file is the newest autosave: saving moves the ones
+	// before it a place older, keeping `keep` (1-5) in all; the *At(n) calls reach the n-th newest
+	// (1 = the newest, 2 the one before it...) for the picker's tiles, null / false when there is none.
+	public static native boolean saveAutosaveState(int keep);
 	public static native boolean loadAutosaveState();
 	public static native boolean hasAutosaveState();
 	public static native byte[] getAutosaveImage();
 	public static native String getAutosaveGamePath();
+	public static native String getAutosavePathAt(int n);
+	public static native byte[] getAutosaveImageAt(int n);
+	public static native boolean loadAutosaveStateAt(int n);
 	// Frames the GS has presented since it opened (host-side, not saved in the state). The
 	// auto-load-on-boot path waits until this is advancing before restoring, so the load happens
 	// once the renderer is actually presenting — otherwise the restored frame never reaches the
@@ -1034,6 +1125,11 @@ public class NativeApp {
 	}
 
 	// Call jni
+	public static String[] findSiblingChds(String uriString) {
+		Context context = getContext();
+		return context != null ? ContentChdFiles.findSiblings(context.getContentResolver(), Uri.parse(uriString)) : new String[0];
+	}
+
 	public static int openContentUri(String uriString) {
 		Context _context = getContext();
 		if(_context != null) {

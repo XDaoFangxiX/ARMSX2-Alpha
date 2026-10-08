@@ -1023,6 +1023,8 @@ bool GSHwHack::OI_PointListPalette(GSRendererHW& r, GSTexture* rt, GSTexture* ds
 			const u32 c = vi.RGBAQ.U32[0];
 			r.m_mem.WritePixel32(x, y, c, FBP, FBW);
 		}
+		// The loop above takes x == m_r.z and y == m_r.w, so the pixels written reach one past m_r.
+		r.m_mem.MarkPagesWritten(r.m_mem.GetOffset(FBP, FBW, PSMCT32), GSVector4i(r.m_r.x, r.m_r.y, r.m_r.z + 1, r.m_r.w + 1));
 		g_texture_cache->InvalidateVideoMem(r.m_context->offset.fb, r.m_r);
 		return false;
 	}
@@ -1559,6 +1561,11 @@ void GSRendererHW::UpdateRenderFixes()
 			m_mv = GSHwHack::s_move_handler_functions[GSConfig.MoveHandlerFunctionId].ptr;
 		}
 	}
+}
+
+bool GSRendererHW::DrawClearsScanMask() const
+{
+	return m_gsc == &GSHwHack::GSC_IRem;
 }
 
 bool GSRendererHW::IsBadFrame()

@@ -3362,6 +3362,7 @@ const ID3DBlob* GSDevice12::GetTFXPixelShader(const GSHWDrawConfig::PSSelector& 
 	sm.AddMacro("PS_COLCLIP_HW", sel.colclip_hw);
 	sm.AddMacro("PS_RTA_CORRECTION", sel.rta_correction);
 	sm.AddMacro("PS_RTA_SRC_CORRECTION", sel.rta_source_correction);
+	sm.AddMacro("PS_REPLACEMENT_ALPHA_SNAP", sel.replacement_alpha_snap);
 	sm.AddMacro("PS_COLCLIP", sel.colclip);
 	sm.AddMacro("PS_BLEND_A", sel.blend_a);
 	sm.AddMacro("PS_BLEND_B", sel.blend_b);
@@ -4763,9 +4764,7 @@ void GSDevice12::DoRenderHW(GSHWDrawConfig& config)
 			SetBlendConstants(config.blend_multi_pass.blend.constant);
 
 		pipe.bs = config.blend_multi_pass.blend;
-		pipe.ps.no_color1 = config.blend_multi_pass.no_color1;
-		pipe.ps.blend_hw = config.blend_multi_pass.blend_hw;
-		pipe.ps.dither = config.blend_multi_pass.dither;
+		config.blend_multi_pass.ApplyTo(pipe.ps);
 		if (BindDrawPipeline(pipe))
 			Draw(config);
 	}

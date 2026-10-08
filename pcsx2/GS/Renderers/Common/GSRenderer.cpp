@@ -10,6 +10,7 @@
 #include "GS/Renderers/Common/GSSnapshotPolicy.h"
 #include "GS/DriverReport/GSDriverReport.h"
 #include "GS/GSDump.h"
+#include "GS/GSDumpBundle.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
 #include "GS/GSUtil.h"
@@ -717,14 +718,16 @@ static const char* GetScreenshotSuffix()
 	return suffixes[static_cast<u8>(GSConfig.ScreenshotFormat)];
 }
 
-static void CompressAndWriteScreenshot(std::string filename, u32 width, u32 height, std::vector<u32> pixels)
+// `announce` false is a screenshot that goes into a dump's zip: the file is gone by the time the OSD
+// would name it, and the dump's own message names the zip.
+static void CompressAndWriteScreenshot(std::string filename, u32 width, u32 height, std::vector<u32> pixels, bool announce = true)
 {
 	RGBA8Image image;
 	image.SetPixels(width, height, std::move(pixels));
 
 	std::string key(fmt::format("GSScreenshot_{}", filename));
 
-	if (!GSDumpReplayer::IsRunner())
+	if (announce && !GSDumpReplayer::IsRunner())
 	{
 		Host::AddIconOSDMessage(key, ICON_FA_CAMERA,
 			fmt::format(TRANSLATE_FS("GS", "Saving screenshot to '{}'."), Path::GetFileName(filename)), 60.0f);
@@ -733,10 +736,10 @@ static void CompressAndWriteScreenshot(std::string filename, u32 width, u32 heig
 	// maybe std::async would be better here.. but it's definitely worth threading, large screenshots take a while to compress.
 	std::unique_lock lock(s_screenshot_threads_mutex);
 	s_screenshot_threads.emplace_back([key = std::move(key), filename = std::move(filename), image = std::move(image),
-										  quality = GSConfig.ScreenshotQuality]() {
+										  quality = GSConfig.ScreenshotQuality, announce]() {
 		if (image.SaveToFile(filename.c_str(), quality))
 		{
-			if (!GSDumpReplayer::IsRunner())
+			if (announce && !GSDumpReplayer::IsRunner())
 			{
 				Host::AddIconOSDMessage(std::move(key), ICON_FA_CAMERA,
 					fmt::format(TRANSLATE_FS("GS", "Saved screenshot to '{}'."), Path::GetFileName(filename)),
@@ -903,15 +906,17 @@ void GSRenderer::EndPresentFrame()
 
 void GSRenderer::SubmitVsync(u32 field, bool registers_written)
 {
-	GSBackQueue::VsyncRecord rec;
-	rec.field = field;
-	rec.registers_written = registers_written;
-	rec.idle_frame = IsIdleFrame(); // front-computable: compares serials against the last frame's
-
 	// VSYNC is never queued: present runs on the MTGS thread behind a drain, so
 	// the back thread stays off the GSDevice on present paths entirely (which
 	// is also what keeps SW + GL-present devices legal in queued modes).
 	DrainBackQueue();
+
+	GSBackQueue::VsyncRecord rec;
+	rec.field = field;
+	rec.registers_written = registers_written;
+	// Compares this object's draw and transfer serials with the last frame's. The back thread
+	// advances them as it executes records, so this has to follow the drain.
+	rec.idle_frame = IsIdleFrame();
 	ExecVsyncRecord(rec);
 }
 
@@ -1296,6 +1301,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	{
 		u32 screenshot_width, screenshot_height;
 		std::vector<u32> screenshot_pixels;
+		const std::string screenshot_path = fmt::format("{}.{}", m_snapshot, GetScreenshotSuffix());
 
 		if (GSConfig.LinearPresent == GSPostBilinearMode::BilinearSharp)
 		{
@@ -1373,10 +1379,16 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			// Which driver drew this, beside the dump. Never fails the dump.
 			GSDriverReport::WriteSidecarForDump(m_snapshot);
 
+			// The dump, the driver report and the screenshot reach the user as one zip. The dump
+			// streams to disk now and packs them when it closes, which is the first moment all
+			// three are complete.
+			m_dump->SetBundle(GSDumpBundle::ZipPath(m_snapshot),
+				{GSDriverReport::SidecarPath(m_snapshot), screenshot_path});
+
 			Host::AddKeyedOSDMessage("GSDump",
 				fmt::format(TRANSLATE_FS("GS", "Saving {0} GS dump {1} to '{2}'"),
 					(m_dump_frames == 1) ? TRANSLATE_SV("GS", "single frame") : TRANSLATE_SV("GS", "multi-frame"), compression_str,
-					Path::GetFileName(m_dump->GetPath())),
+					Path::GetFileName(m_dump->GetFinalPath())),
 				Host::OSD_INFO_DURATION);
 		}
 
@@ -1389,8 +1401,8 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 			aspect_correct, true,
 			&screenshot_width, &screenshot_height, &screenshot_pixels))
 		{
-			CompressAndWriteScreenshot(fmt::format("{}.{}", m_snapshot, GetScreenshotSuffix()),
-				screenshot_width, screenshot_height, std::move(screenshot_pixels));
+			CompressAndWriteScreenshot(screenshot_path,
+				screenshot_width, screenshot_height, std::move(screenshot_pixels), !snapshot_action.open_dump);
 		}
 		else
 		{
@@ -1409,8 +1421,9 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 		if (m_dump->VSync(field, snapshot_action.dump_is_last, m_regs))
 		{
 			Host::AddKeyedOSDMessage("GSDump",
-				fmt::format(TRANSLATE_FS("GS", "Saved GS dump to '{}'."), Path::GetFileName(m_dump->GetPath())),
+				fmt::format(TRANSLATE_FS("GS", "Saved GS dump to '{}'."), Path::GetFileName(m_dump->GetFinalPath())),
 				Host::OSD_INFO_DURATION);
+			// Closes the dump and packs the zip. A failed pack replaces the message above.
 			m_dump.reset();
 		}
 		else if (!snapshot_action.dump_is_last)
@@ -1554,6 +1567,31 @@ void GSTranslateWindowToDisplayCoordinates(float window_x, float window_y, float
 
 	*display_x = rel_x / draw_width;
 	*display_y = rel_y / draw_height;
+}
+
+// The other way: where on the window a normalized display position is (an arcade light gun's stick aim,
+// for its crosshair).
+void GSTranslateDisplayToWindowCoordinates(float display_x, float display_y, float* window_x, float* window_y)
+{
+	*window_x = s_last_draw_rect.x + display_x * (s_last_draw_rect.z - s_last_draw_rect.x);
+	*window_y = s_last_draw_rect.y + display_y * (s_last_draw_rect.w - s_last_draw_rect.y);
+}
+
+// The same mapping without collapsing a position off the picture to (-1,-1): the caller gets graded
+// coordinates beyond [0,1] (an arcade lightgun's aim beside the screen, PCSX2x6).
+void GSTranslateWindowToDisplayCoordinatesUnclamped(float window_x, float window_y, float* display_x, float* display_y)
+{
+	const float draw_width = s_last_draw_rect.z - s_last_draw_rect.x;
+	const float draw_height = s_last_draw_rect.w - s_last_draw_rect.y;
+	if (draw_width <= 0.0f || draw_height <= 0.0f)
+	{
+		*display_x = -1.0f;
+		*display_y = -1.0f;
+		return;
+	}
+
+	*display_x = (window_x - s_last_draw_rect.x) / draw_width;
+	*display_y = (window_y - s_last_draw_rect.y) / draw_height;
 }
 
 void GSSetDisplayAlignment(GSDisplayAlignment alignment)

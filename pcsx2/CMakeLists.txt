@@ -302,6 +302,17 @@ set(pcsx2SPU2Headers
 
 # DEV9 sources
 set(pcsx2DEV9Sources
+	# Namco System 246/256 arcade board (PCSX2x6); only reached during an arcade session
+	DEV9/ACATA.cpp
+	DEV9/ACATA_IO.cpp
+	DEV9/ACATA_IO_CHD.cpp
+	DEV9/ACATAPI.cpp
+	DEV9/ACCORE.cpp
+	DEV9/ACJV.cpp
+	DEV9/ACRAM.cpp
+	DEV9/ACSRAM.cpp
+	DEV9/ACUART.cpp
+	DEV9/ACUART_GLUE.cpp
 	DEV9/AdapterUtils.cpp
 	DEV9/ATA/Commands/ATA_Command.cpp
 	DEV9/ATA/Commands/ATA_CmdDMA.cpp
@@ -360,6 +371,21 @@ endif()
 
 # DEV9 headers
 set(pcsx2DEV9Headers
+	DEV9/ACATA.h
+	DEV9/ACATA_CMD_RESPONSES
+	DEV9/ACATA_internal.h
+	DEV9/ACATA_IO_CHD.h
+	DEV9/ACATA_IO_WRITES.h
+	DEV9/ACATAPI.h
+	DEV9/ACCORE.h
+	DEV9/ACDEV.h
+	DEV9/ACJV.h
+	DEV9/ACJV_Inputs.h
+	DEV9/ACMACROS.h
+	DEV9/ACRAM.h
+	DEV9/ACSRAM.h
+	DEV9/ACUART.h
+	DEV9/ACUART_GLUE.h
 	DEV9/AdapterUtils.h
 	DEV9/ATA/ATA.h
 	DEV9/ATA/HddCreate.h
@@ -527,6 +553,7 @@ set(pcsx2GSSources
 	GS/GSDrawingContext.cpp
 	GS/GSDrawingEnvironment.cpp
 	GS/GSDump.cpp
+	GS/GSDumpBundle.cpp
 	GS/GSLocalMemory.cpp
 	GS/GSLzma.cpp
 	GS/GSPerfMon.cpp
@@ -538,6 +565,7 @@ set(pcsx2GSSources
 	GS/GSVector.cpp
 	GS/MultiISA.cpp
 	GS/DriverReport/GSDriverReport.cpp
+	GS/DriverReport/GSDriverReportActive.cpp
 	GS/DriverReport/GSDriverReportClassify.cpp
 	GS/DriverReport/GSDriverReportJson.cpp
 	GS/DriverReport/GSDriverReportProfile.cpp
@@ -569,6 +597,7 @@ set(pcsx2GSSources
 	GS/Renderers/HW/GSTextureCache.cpp
 	GS/Renderers/HW/GSTextureReplacementLoaders.cpp
 	GS/Renderers/HW/GSTextureReplacements.cpp
+	GS/Renderers/HW/GSTextureUpscaler.cpp
 	GS/Renderers/SW/GSTextureCacheSW.cpp
 	)
 
@@ -581,6 +610,7 @@ endif()
 # GS headers
 set(pcsx2GSHeaders
 	GS/DriverReport/GSDriverReport.h
+	GS/DriverReport/GSDriverReportActive.h
 	GS/DriverReport/GSDriverReportClassify.h
 	GS/DriverReport/GSDriverReportJson.h
 	GS/DriverReport/GSDriverReportProfile.h
@@ -594,6 +624,7 @@ set(pcsx2GSHeaders
 	GS/GSDrawingContext.h
 	GS/GSDrawingEnvironment.h
 	GS/GSDump.h
+	GS/GSDumpBundle.h
 	GS/GSExtra.h
 	GS/GSGL.h
 	GS/GSRegs.h
@@ -621,6 +652,8 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSDirtyRect.h
 	GS/Renderers/Common/GSDrawRoad.h
 	GS/Renderers/Common/GSFastList.h
+	GS/Renderers/Common/GSAlphaBitLogicOp.h
+	GS/Renderers/Common/GSReplacementAlphaSnap.h
 	GS/Renderers/Common/GSFastStencilShadow.h
 	GS/Renderers/Common/GSFieldShiftDetector.h
 	GS/Renderers/Common/GSFieldShiftPolicy.h
@@ -657,8 +690,11 @@ set(pcsx2GSHeaders
 	GS/Renderers/HW/GSPointPlace.h
 	GS/Renderers/HW/GSRendererHW.h
 	GS/Renderers/HW/GSSpriteEdgeSnap.h
+	GS/Renderers/HW/GSTexelAddressedDraw.h
 	GS/Renderers/HW/GSTextureCache.h
 	GS/Renderers/HW/GSTextureReplacements.h
+	GS/Renderers/HW/GSTextureUpscaleSupport.h
+	GS/Renderers/HW/GSTextureUpscaler.h
 	GS/Renderers/HW/GSVertexHW.h
 	GS/Renderers/SW/GSBlockWalk.h
 	GS/Renderers/SW/GSColourWalk.h
@@ -1760,6 +1796,13 @@ set_source_files_properties(PrecompiledHeader.cpp PROPERTIES HEADER_FILE_ONLY TR
 # true.
 if(NOT MSVC)
 	set_source_files_properties(VUops.cpp FPU.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
+# The RAISR upscaler's scalar and NEON paths must round identically, so the only fused
+# multiply-adds are the ones it writes out (MulAdd / vfmaq). GSTextureUpscaler.cpp says so with a
+# pragma on clang; this covers GCC.
+if(NOT MSVC)
+	set_source_files_properties(GS/Renderers/HW/GSTextureUpscaler.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 if(COMMAND target_precompile_headers)
 	message("Using precompiled headers.")

@@ -90,6 +90,10 @@ void main()
 
 		// Float coords
 		vsOut.t.xy = st;
+		#if VS_SPRITE_EDGE_CLAMP
+			// An FST sprite's ST carries its far-edge sample limit, normalised like the UV.
+			vsOut.t.xy = st * TextureScale;
+		#endif
 		vsOut.t.w = a_q;
 	#else
 		vsOut.t = vec4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -184,6 +188,10 @@ ProcessedVertex load_vertex(uint index)
 		#endif
 
 		vtx.t.xy = st;
+		#if VS_SPRITE_EDGE_CLAMP
+			// An FST sprite's ST carries its far-edge sample limit, normalised like the UV.
+			vtx.t.xy = st * TextureScale;
+		#endif
 		vtx.t.w = a_q;
 	#else
 		vtx.t = vec4(0.0f, 0.0f, 0.0f, 1.0f);
@@ -318,11 +326,9 @@ void main()
 
 	bool is_bottom = (vid & 2u) != 0u;
 	bool is_right = (vid & 1u) != 0u;
-#if VS_PROVOKING_VERTEX_LAST
+	// Lines reach here as index pairs (a, a + 1) whatever the provoking vertex is; a provoking-first
+	// device gets its flat colours fixed on the CPU, not its indices reordered.
 	uint vid_other = is_bottom ? vid_base - 1 : vid_base + 1;
-#else
-	uint vid_other = is_bottom ? vid_base + 1 : vid_base - 1;
-#endif
 
 	vtx = load_vertex(vid_base);
 	ProcessedVertex other = load_vertex(vid_other);
@@ -1345,7 +1351,13 @@ vec4 sample_color(vec2 st)
 #if PS_AEM_FMT == FMT_32 && PS_PAL_FMT == 0 && PS_RTA_SRC_CORRECTION
 	t.a = t.a * (128.5f / 255.0f);
 #endif
-	return trunc(t * 255.0f + 0.05f);
+	t = trunc(t * 255.0f + 0.05f);
+#if PS_REPLACEMENT_ALPHA_SNAP
+	// A pack texture's opaque alpha, which ASTC moves off 0x80 (GSReplacementAlphaSnap.h).
+	if (abs(t.a - 128.0f) <= 8.0f)
+		t.a = 128.0f;
+#endif
+	return t;
 }
 
 #endif // NEEDS_TEX
@@ -1442,6 +1454,17 @@ vec4 ps_color()
 	// which can land a hair under an integer where the divide is exact.
 	vec2 native_here = floor(gl_FragCoord.xy) / NativeTexelGrid.z;
 	st += NativeTexelGrid.xy * (floor(native_here) - native_here);
+#endif
+
+#if PS_SPRITE_EDGE_CLAMP
+	// No device pixel of a snapped sprite samples past what its last native pixel sampled
+	// (vsIn.t.xy, per sprite). The limit is on the far side, which is above the coordinate
+	// where it grows with the screen axis and below it where it shrinks.
+	{
+		vec2 limit = vsIn.t.xy;
+		st.x = (dFdx(vsIn.ti.x) >= 0.0f) ? min(st.x, limit.x) : max(st.x, limit.x);
+		st.y = (dFdy(vsIn.ti.y) >= 0.0f) ? min(st.y, limit.y) : max(st.y, limit.y);
+	}
 #endif
 
 #if !NEEDS_TEX

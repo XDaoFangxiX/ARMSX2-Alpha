@@ -304,6 +304,7 @@ fun PadTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
             val pads = remember(refreshToken.intValue) { com.armsx2.input.PadRouter.connectedPads() }
             if (pads.isNotEmpty()) {
                 HelpText(str("pad.assign.help"))
+                HelpText(str("pad.assign.rumbleHelp"))
                 // Only the slots Multitap actually arms. Offering player 3-8 with Multitap off
                 // would let the user pin a pad at an un-armed PS2 port, where its input goes
                 // nowhere at all -- the router ignores such a pin, so the picker must not show it.
@@ -779,6 +780,9 @@ fun PadTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
                 }
             }
         }
+        // Arcade controls: what each pad button does on an arcade game's cabinet, the player's own
+        // layout per game (ArcadeControls). For any arcade game in the library, the one being played first.
+        ArcadeControlsSection(gameId = com.armsx2.arcade.Arcade.sessionGameId.value, pickGame = true)
         CollapsibleSection(str("pad.section.onScreenControls"), initiallyExpanded = false) {
             // Controller hotkeys now live in their own dedicated "Hotkeys" tab
             // (see HotkeysTab) so they're easier to find than buried under Pad.
@@ -1283,9 +1287,9 @@ private fun StickTargetPickerDialog(
     }
 }
 
-/** Shared footer button for the two pickers below. */
+/** Shared footer button for the pickers here and in ArcadeControlsSection. */
 @Composable
-private fun PickerButton(label: String, id: String, onClick: () -> Unit) {
+internal fun PickerButton(label: String, id: String, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         modifier = Modifier.controllerFocusable(
@@ -1306,7 +1310,7 @@ private fun PickerButton(label: String, id: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun StickPickItem(label: String, selected: Boolean, id: String, onClick: () -> Unit) {
+internal fun StickPickItem(label: String, selected: Boolean, id: String, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1342,6 +1346,9 @@ internal fun AnalogSticksSection(
     editSerial: String? = null,
 ) {
     CollapsibleSection(str("pad.section.analogSticks"), initiallyExpanded = false) {
+        // Redraw when a switch below changes a setting; Compose can't observe the prefs themselves.
+        @Suppress("UNUSED_EXPRESSION")
+        refreshToken.intValue
         // Extra button on the ON-SCREEN left stick: a sprint/jump button just above it that
         // you can reach by GLIDING the same thumb up off the stick, without lifting off and
         // losing your heading (GTA / Silent Hill sprint, GoW / KH jump).
@@ -1838,14 +1845,11 @@ private fun MacroConfigDialog(
                                 .fillMaxWidth()
                                 .height(52.dp)
                                 .clickable { toggle() }
-                                // Left/Right clear and set, matching every other toggle in the app,
-                                // so the row behaves the same inside this panel as outside it.
+                                // Only A ticks it, like every other switch in the app.
                                 .controllerFocusable(
                                     controllerId = "$layer.${t.code}",
                                     shape = RoundedCornerShape(10.dp),
                                     onConfirm = toggle,
-                                    onLeft = { if (on) selected.remove(t.code) },
-                                    onRight = { if (!on) selected.add(t.code) },
                                 )
                                 .padding(horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,

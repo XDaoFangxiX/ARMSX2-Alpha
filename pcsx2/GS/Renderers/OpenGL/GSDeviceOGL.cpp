@@ -1013,6 +1013,11 @@ bool GSDeviceOGL::CheckFeatures()
 		static_cast<unsigned>(profile_selection.driver.matched_rule_count),
 		static_cast<unsigned long long>(profile_selection.driver.bugs),
 		static_cast<unsigned long long>(profile_selection.driver.workarounds));
+	Console.WriteLn("GL: GPU profile rules matched: %s",
+		GpuProfileDetector::DescribeMatchedRules(profile_selection.driver).c_str());
+	Console.WriteLn("GL: GPU profile bugs: %s", GpuProfileDetector::DescribeBugs(profile_selection.driver.bugs).c_str());
+	Console.WriteLn("GL: GPU profile workarounds: %s",
+		GpuProfileDetector::DescribeWorkarounds(profile_selection.driver.workarounds).c_str());
 	DevCon.WriteLn("GL: GPU profile hints: %s", profile_selection.hints.c_str());
 	bool use_mali_profile = IsMaliGPUProfile();
 	bool use_adreno_profile = IsAdrenoGPUProfile();
@@ -1132,6 +1137,20 @@ bool GSDeviceOGL::CheckFeatures()
 			glDrawElementsBaseVertex = glDrawElementsBaseVertexEXT;
 		else
 			Console.Error("GL: glDrawElementsBaseVertex is unavailable (no core/OES/EXT) — draws will fail.");
+	}
+
+	// Same ES 3.2-vs-3.1 gap for the ranged variant. The draws over the index stream buffer pass the
+	// index range so the driver doesn't have to scan for it: without a range, Mali scans the indices
+	// and caches the result per (buffer, offset, count) in CPU memory, and since the stream buffer is
+	// never respecified and every draw lands at a new offset, that cache grows for the whole session
+	// (320 MB in a single allocation, killed by lmkd after ~2 h on a 4 GB device). If no variant is
+	// available, DrawElementsInRange() falls back to the unranged call.
+	if (!glDrawRangeElementsBaseVertex)
+	{
+		if (GLAD_GL_OES_draw_elements_base_vertex && glDrawRangeElementsBaseVertexOES)
+			glDrawRangeElementsBaseVertex = glDrawRangeElementsBaseVertexOES;
+		else if (GLAD_GL_EXT_draw_elements_base_vertex && glDrawRangeElementsBaseVertexEXT)
+			glDrawRangeElementsBaseVertex = glDrawRangeElementsBaseVertexEXT;
 	}
 
 	// glColorMaski (indexed color mask) is core in GLSL ES 3.2 but only extension-provided on
@@ -2107,10 +2126,20 @@ void GSDeviceOGL::DrawIndexedPrimitive()
 	DrawIndexedPrimitive(0, m_index.count);
 }
 
+// Every index of the draw is in [0, vertex_count), relative to base_vertex. Passing that range keeps
+// the driver from scanning the indices and caching the result (see the note in CheckFeatures()).
+static void DrawElementsInRange(GLenum mode, u32 vertex_count, GLsizei count, const void* indices, GLint base_vertex)
+{
+	if (glDrawRangeElementsBaseVertex && vertex_count > 0)
+		glDrawRangeElementsBaseVertex(mode, 0, vertex_count - 1, count, GL_UNSIGNED_SHORT, indices, base_vertex);
+	else
+		glDrawElementsBaseVertex(mode, count, GL_UNSIGNED_SHORT, indices, base_vertex);
+}
+
 void GSDeviceOGL::DrawIndexedPrimitive(int offset, int count)
 {
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
-	glDrawElementsBaseVertex(m_draw_topology, count, GL_UNSIGNED_SHORT,
+	DrawElementsInRange(m_draw_topology, m_vertex.count, count,
 		reinterpret_cast<void*>((static_cast<u32>(m_index.start) + static_cast<u32>(offset)) * sizeof(u16)),
 		static_cast<GLint>(m_vertex.start));
 }
@@ -2661,6 +2690,7 @@ std::string GSDeviceOGL::GetPSSource(const PSSelector& sel)
 		+ fmt::format("#define PS_COLCLIP_HW {}\n", sel.colclip_hw)
 		+ fmt::format("#define PS_RTA_CORRECTION {}\n", sel.rta_correction)
 		+ fmt::format("#define PS_RTA_SRC_CORRECTION {}\n", sel.rta_source_correction)
+		+ fmt::format("#define PS_REPLACEMENT_ALPHA_SNAP {}\n", sel.replacement_alpha_snap)
 		+ fmt::format("#define PS_DITHER {}\n", sel.dither)
 		+ fmt::format("#define PS_DITHER_ADJUST {}\n", sel.dither_adjust)
 		+ fmt::format("#define PS_ZCLAMP {}\n", sel.zclamp)
@@ -3772,8 +3802,10 @@ void GSDeviceOGL::RenderImGui()
 				glBindTextureUnit(0, texture_id);
 			}
 
-			glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)pcmd->ElemCount, GL_UNSIGNED_SHORT,
-				(void*)(intptr_t)((pcmd->IdxOffset + m_index.start) * sizeof(ImDrawIdx)), pcmd->VtxOffset + vertex_start);
+			// VtxOffset is folded into the base vertex, so the indices reach at most the end of VtxBuffer.
+			DrawElementsInRange(GL_TRIANGLES, static_cast<u32>(cmd_list->VtxBuffer.Size) - pcmd->VtxOffset,
+				(GLsizei)pcmd->ElemCount, (void*)(intptr_t)((pcmd->IdxOffset + m_index.start) * sizeof(ImDrawIdx)),
+				pcmd->VtxOffset + vertex_start);
 		}
 
 		g_perfmon.Put(GSPerfMon::DrawCalls, cmd_list->CmdBuffer.Size);
@@ -4350,9 +4382,7 @@ void GSDeviceOGL::DoRenderHW(GSHWDrawConfig& config)
 		{
 			OMSetBlendState();
 		}
-		psel.ps.no_color1 = config.blend_multi_pass.no_color1;
-		psel.ps.blend_hw = config.blend_multi_pass.blend_hw;
-		psel.ps.dither = config.blend_multi_pass.dither;
+		config.blend_multi_pass.ApplyTo(psel.ps);
 		SetupPipeline(psel);
 		Draw(config);
 	}
