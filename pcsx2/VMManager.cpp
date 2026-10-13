@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "Achievements.h"
+#include "Arcade/AcGameFile.h"
+#include "Autosave.h"
 #include "BuildVersion.h"
 #include "CDVD/CDVD.h"
 #include "CDVD/IsoReader.h"
@@ -315,6 +317,13 @@ VMState VMManager::GetState()
 {
 	return s_state.load(std::memory_order_acquire);
 }
+
+#ifdef PCSX2_RECOMPILER_TESTS
+void VMManager::Internal::SetStateForTests(VMState state)
+{
+	s_state.store(state, std::memory_order_release);
+}
+#endif
 
 void VMManager::AccumulateSessionPlaytime()
 {
@@ -1638,6 +1647,14 @@ bool VMManager::OpenArcadeGame(const VMBootParameters& boot_params, Error* error
 		return false;
 	}
 
+	// Names the core writes under (dongle, card, SRAM) must stay in their folders; Arcade::ReadAcGameInfo() makes
+	// the same check for the game list.
+	if (const std::string unsafe = Arcade::CheckWrittenNames(ini, boot_params.arcade_sram.empty()); !unsafe.empty())
+	{
+		Error::SetString(error, unsafe);
+		return false;
+	}
+
 	const GameDatabaseSchema::GameEntry* const db = GameDatabase::findGame(gameid);
 
 	// The board: System 246, or the overclocked System 256 / Super System 256.
@@ -2310,6 +2327,8 @@ void VMManager::Shutdown(bool save_resume_state)
 			});
 		}
 	}
+
+	Autosave::OnShutdown();
 
 	// end input recording before clearing state
 	if (g_InputRecording.isActive())
@@ -3131,7 +3150,8 @@ bool VMManager::IsDiscFileName(const std::string_view path)
 
 bool VMManager::IsLoadableFileName(const std::string_view path)
 {
-	return IsDiscFileName(path) || IsElfFileName(path) || IsGSDumpFileName(path) || IsBlockDumpFileName(path);
+	return IsDiscFileName(path) || IsElfFileName(path) || IsArcadeGameFileName(path) || IsGSDumpFileName(path) ||
+	       IsBlockDumpFileName(path);
 }
 
 #ifdef _WIN32
@@ -3656,6 +3676,7 @@ void VMManager::Internal::PollInputOnCPUThread()
 {
 	Host::PumpMessagesOnCPUThread();
 	InputManager::PollSources();
+	Autosave::OnPollInput();
 
 	if (EmuConfig.EnableRecordingTools)
 	{
