@@ -35,7 +35,7 @@ object UiScale {
     // needs its own layout". Scaling the adaptive cell width fixes it without a second layout:
     // wider cells => bigger art AND fewer, better-spaced columns, and phone users can use it too.
     private const val KEY_COVER = "ui.coverScale"
-    const val COVER_MIN = 0.75f
+    const val COVER_MIN = 0.30f
     const val COVER_MAX = 2.50f
 
     /** Always 1.0 out of the box, on every screen size. An earlier version guessed a bigger default
